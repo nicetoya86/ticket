@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { supabasePublic } from '@/lib/supabaseServer';
+import { supabaseAdmin } from '@/lib/supabaseServer';
 
 export async function GET(req: Request) {
 	const { searchParams } = new URL(req.url);
@@ -11,7 +11,7 @@ export async function GET(req: Request) {
 	const toDate = to ?? new Date().toISOString().slice(0, 10);
 	const sourceParam = sources.join(',');
 
-	const { data, error } = await supabasePublic.rpc('unified_interactions_heatmap', {
+	const { data, error } = await supabaseAdmin.rpc('unified_interactions_heatmap', {
 		p_from: fromDate,
 		p_to: toDate,
 		p_sources: sourceParam
