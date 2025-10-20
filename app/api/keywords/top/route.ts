@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { supabaseAdmin } from '@/lib/supabaseServer';
+import { supabasePublic } from '@/lib/supabaseServer';
 
 export async function GET(req: Request) {
 	const { searchParams } = new URL(req.url);
@@ -13,7 +13,7 @@ export async function GET(req: Request) {
 	const fromDate = from ?? new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString().slice(0, 10);
 	const toDate = to ?? new Date().toISOString().slice(0, 10);
 
-	let query = supabaseAdmin
+	let query = supabasePublic
 		.from('keywords_daily')
 		.select('keyword, freq, tfidf')
 		.gte('date', fromDate)

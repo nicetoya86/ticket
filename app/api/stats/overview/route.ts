@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { supabaseAdmin } from '@/lib/supabaseServer';
+import { supabasePublic } from '@/lib/supabaseServer';
 
 export async function GET(req: Request) {
 	const { searchParams } = new URL(req.url);
@@ -11,7 +11,7 @@ export async function GET(req: Request) {
 	const fromDate = from ?? new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString().slice(0, 10);
 	const toDate = to ?? new Date().toISOString().slice(0, 10);
 
-	let query = supabaseAdmin
+	let query = supabasePublic
 		.from('stats_daily')
 		.select('date, count')
 		.gte('date', fromDate)
@@ -22,7 +22,7 @@ export async function GET(req: Request) {
 	if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
 	// byCategory는 샘플: 최근일 기준 집계
-	const { data: byCategory, error: e2 } = await supabaseAdmin
+	const { data: byCategory, error: e2 } = await supabasePublic
 		.from('stats_daily')
 		.select('category_id, count')
 		.eq('date', toDate)
