@@ -16,10 +16,18 @@ const serverEnvSchema = z.object({
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
 
+function stripQuotes(v: string): string {
+	const t = v.trim();
+	if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith('\'') && t.endsWith('\''))) {
+		return t.slice(1, -1).trim();
+	}
+	return t;
+}
+
 function sanitize<T extends Record<string, any>>(raw: T): T {
 	const out: Record<string, any> = {};
 	for (const [k, v] of Object.entries(raw)) {
-		out[k] = typeof v === 'string' ? v.trim() : v;
+		out[k] = typeof v === 'string' ? stripQuotes(v) : v;
 	}
 	return out as T;
 }
