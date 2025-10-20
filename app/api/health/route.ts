@@ -1,21 +1,21 @@
 import { NextResponse } from 'next/server';
-import { supabasePublic } from '@/lib/supabaseServer';
+import { supabasePublic, supabaseAdmin } from '@/lib/supabaseServer';
 import { env } from '@/lib/env';
 
-function extractRefFromAnon(anon: string | undefined) {
+function extractRef(jwt: string | undefined | null) {
 	try {
-		if (!anon) return null;
-		const parts = anon.split('.');
+		if (!jwt) return null;
+		const parts = jwt.split('.');
 		if (parts.length < 2) return null;
 		const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8')) as any;
-		return payload?.ref ?? null;
+		return { ref: payload?.ref ?? null, role: payload?.role ?? null };
 	} catch {
 		return null;
 	}
 }
 
 export async function GET() {
-	const urlHost = (() => {
+	const urlRef = (() => {
 		try {
 			const u = new URL(env.SUPABASE_URL);
 			return u.host.split('.')[0];
@@ -23,18 +23,24 @@ export async function GET() {
 			return null;
 		}
 	})();
-	const keyRef = extractRefFromAnon(env.SUPABASE_ANON_KEY);
 
-	const ping = await supabasePublic.from('categories').select('category_id').limit(1);
-	const ok = !ping.error;
+	const anonMeta = extractRef(env.SUPABASE_ANON_KEY);
+	const serviceMeta = extractRef(env.SUPABASE_SERVICE_ROLE_KEY);
+
+	const pubPing = await supabasePublic.from('categories').select('category_id').limit(1);
+	const adminPing = await supabaseAdmin.from('categories').select('category_id').limit(1);
+
 	return NextResponse.json({
-		status: ok ? 'ok' : 'error',
-		message: ping.error?.message ?? 'healthy',
-		projectRefFromUrl: urlHost,
-		projectRefFromKey: keyRef,
+		status: pubPing.error && adminPing.error ? 'error' : 'ok',
+		public: { ok: !pubPing.error, error: pubPing.error?.message ?? null },
+		admin: { ok: !adminPing.error, error: adminPing.error?.message ?? null },
+		projectRefFromUrl: urlRef,
+		projectRefFromAnon: anonMeta,
+		projectRefFromService: serviceMeta,
 		envPresence: {
 			SUPABASE_URL: Boolean(env.SUPABASE_URL),
 			SUPABASE_ANON_KEY: Boolean(env.SUPABASE_ANON_KEY),
+			SUPABASE_SERVICE_ROLE_KEY: Boolean(env.SUPABASE_SERVICE_ROLE_KEY)
 		}
 	});
 }
