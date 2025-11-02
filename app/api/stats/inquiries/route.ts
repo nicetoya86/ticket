@@ -39,6 +39,12 @@ export async function GET(req: Request) {
         if (/키워드를\s*입력/.test(l)) return true;
         if (/\[처음으로\]/.test(l)) return true;
         if (/^✅|^✔️|^➡️|^🔍️|^🔎️|^🔊️|^❗️|^👇️/u.test(l)) return true; // lines starting with these emojis
+        // Notice/announcement cards recommended by bot
+        if (/^\[공지\]/i.test(l)) return true;
+        if (/초대왕\s*발표/i.test(l)) return true;
+        if (/보너스\s*포인트|보너스포인트/i.test(l)) return true;
+        if (/당첨자(분들)?/i.test(l)) return true;
+        if (/SMS를?\s*전달\s*드릴\s*예정입니다?/i.test(l)) return true;
         if (/유의\s*사항/iu.test(l)) return true;
         if (/자세한\s*화면은\s*아래\s*이미지를\s*눌러주세요/iu.test(l)) return true;
         if (/문의하신\s*내용에\s*도움이\s*될만한\s*답을\s*찾아드릴게요/i.test(l)) return true;
