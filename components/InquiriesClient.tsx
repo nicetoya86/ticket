@@ -18,7 +18,8 @@ export default function InquiriesClient() {
 
 	const from = sp.get('from') ?? '';
 	const to = sp.get('to') ?? '';
-	const mode = sp.get('mode') ?? 'counts'; // counts | users | texts
+	const rawMode = sp.get('mode') ?? 'counts';
+	const mode = rawMode === 'users' ? 'counts' : rawMode; // counts | texts (users 제거)
 	const group = sp.get('group');
 	const groupEffective = mode === 'texts' ? (group === '0' ? '0' : '1') : '0'; // default group ON for texts
 	const status = sp.get('status') ?? 'closed';
@@ -43,7 +44,6 @@ export default function InquiriesClient() {
 				if (to) qs.set('to', to);
 				if (status) qs.set('status', status);
 				if (fieldTitle) qs.set('fieldTitle', fieldTitle);
-				if (mode === 'users') qs.set('detail', 'users');
 				if (mode === 'texts') qs.set('detail', 'texts');
 				if (groupEffective === '1') qs.set('group', '1'); else qs.delete('group');
 				const res = await fetch(`/api/stats/inquiries?${qs.toString()}`, { signal: controller.signal, cache: 'no-store' });
