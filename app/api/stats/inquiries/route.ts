@@ -68,6 +68,12 @@ export async function GET(req: Request) {
         if (/^감사합니다\s*:?\s*\)?$/i.test(l)) return true;
         if (/담당\s*매니저를\s*연결해\s*드릴게요/.test(l)) return true;
         if (/정보\s*입력\s*감사합니다/.test(l)) return true;
+        // Button-name style labels (examples and generalized heuristics)
+        if (/(시술이벤트\s*구매\s*방법|구매가\s*안돼요|구매\s*취소\s*방법|구매\s*취소가\s*되지\s*않았어요|결제방식\s*지원\s*여부)/i.test(l)) return true;
+        // short imperative/help labels commonly used for buttons
+        if (l.length <= 30 && /(?:방법|여부|안돼요|안되요|안됩니다|안됨|확인하기|다시\s*입력하기|검색하기|연장하기|취소하기|문의하기)$/u.test(l)) return true;
+        // comma-separated multiple button labels in one line
+        if (/,\s*/.test(l) && /(방법|여부|안돼요|안되요|안됩니다|취소|구매|결제)/.test(l) && l.length <= 80) return true;
         // Purchase / guidance flows
         if (/구매\s*ID는\s*아래\s*경로에서\s*확인이\s*가능해요/i.test(l)) return true;
         if (/마이\s*>\s*구매\s*목록/i.test(l)) return true;
