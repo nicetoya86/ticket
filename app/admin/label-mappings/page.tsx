@@ -9,21 +9,23 @@ export default function AdminLabelMappingsPage() {
 	const [categoryId, setCategoryId] = useState('');
 	const [error, setError] = useState<string | null>(null);
 
-	async function load() {
-		setError(null);
-		const res = await fetch(`/api/label-mappings?source=${source}`);
-		if (!res.ok) { setError(`HTTP ${res.status}`); return; }
-		setRows(await res.json());
-	}
-
-	useEffect(() => { void load(); }, [source]);
+	useEffect(() => {
+		(async () => {
+			setError(null);
+			const res = await fetch(`/api/label-mappings?source=${source}`);
+			if (!res.ok) { setError(`HTTP ${res.status}`); return; }
+			setRows(await res.json());
+		})();
+	}, [source]);
 
 	async function onAdd() {
 		setError(null);
 		const res = await fetch('/api/label-mappings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source, label, categoryId }) });
 		if (!res.ok) { setError('생성 실패'); return; }
 		setLabel(''); setCategoryId('');
-		await load();
+		// reload
+		const res2 = await fetch(`/api/label-mappings?source=${source}`);
+		if (res2.ok) setRows(await res2.json());
 	}
 
 	return (

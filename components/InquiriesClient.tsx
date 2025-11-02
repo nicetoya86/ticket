@@ -57,7 +57,7 @@ export default function InquiriesClient() {
 			}
 		})();
 		return () => controller.abort();
-	}, [from, to, mode, status, fieldTitle, group, sp]);
+	}, [from, to, mode, status, fieldTitle, groupEffective, sp]);
 
 	const title = useMemo(() => {
 		if (mode === 'users') return '문의유형별 유저/티켓';

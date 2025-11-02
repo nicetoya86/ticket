@@ -17,7 +17,8 @@ function extractRef(jwt: string | undefined | null) {
 export async function GET() {
 	const urlRef = (() => {
 		try {
-			const u = new URL(env.SUPABASE_URL);
+			if (!env.SUPABASE_URL) return null;
+			const u = new URL(env.SUPABASE_URL as string);
 			return u.host.split('.')[0];
 		} catch {
 			return null;
