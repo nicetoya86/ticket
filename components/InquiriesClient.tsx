@@ -68,18 +68,18 @@ export default function InquiriesClient() {
 	return (
 		<div>
 			<h2 className="text-lg font-semibold">{title}</h2>
-			<div className="mt-4 p-3 border bg-white rounded-md flex flex-wrap items-center gap-3 text-sm">
+			<div className="mt-4 p-3 card flex flex-wrap items-center gap-3 text-sm">
 				<label className="flex items-center gap-2">
 					<span className="text-gray-600">From</span>
-					<input type="date" value={from} onChange={(e) => update({ from: e.target.value || null })} className="border rounded px-2 py-1" />
+					<input type="date" value={from} onChange={(e) => update({ from: e.target.value || null })} className="input" />
 				</label>
 				<label className="flex items-center gap-2">
 					<span className="text-gray-600">To</span>
-					<input type="date" value={to} onChange={(e) => update({ to: e.target.value || null })} className="border rounded px-2 py-1" />
+					<input type="date" value={to} onChange={(e) => update({ to: e.target.value || null })} className="input" />
 				</label>
 				<label className="flex items-center gap-2">
 					<span className="text-gray-600">Status</span>
-					<select value={status} onChange={(e) => update({ status: e.target.value })} className="border rounded px-2 py-1">
+					<select value={status} onChange={(e) => update({ status: e.target.value })} className="select">
 						<option value="closed">closed</option>
 						<option value="solved">solved</option>
 						<option value="open">open</option>
@@ -90,11 +90,11 @@ export default function InquiriesClient() {
 				</label>
 				<label className="flex items-center gap-2">
 					<span className="text-gray-600">Field</span>
-					<input type="text" value={fieldTitle} onChange={(e) => update({ fieldTitle: e.target.value || null })} className="border rounded px-2 py-1" placeholder="문의유형(고객)" />
+					<input type="text" value={fieldTitle} onChange={(e) => update({ fieldTitle: e.target.value || null })} className="input" placeholder="문의유형(고객)" />
 				</label>
 				<label className="flex items-center gap-2">
 					<span className="text-gray-600">Mode</span>
-					<select value={mode} onChange={(e) => update({ mode: e.target.value })} className="border rounded px-2 py-1">
+					<select value={mode} onChange={(e) => update({ mode: e.target.value })} className="select">
 						<option value="counts">counts</option>
 						<option value="users">users</option>
 						<option value="texts">texts</option>
@@ -112,13 +112,13 @@ export default function InquiriesClient() {
 				{loading && <div className="text-gray-500">로딩 중...</div>}
 				{error && <div className="text-red-600">에러: {error}</div>}
 				{!loading && !error && (
-					<div className="border bg-white rounded-md">
+						<div className="card overflow-hidden">
 						{mode === 'counts' && (
-							<table className="w-full text-sm">
-								<thead><tr className="bg-gray-50"><th className="p-2 text-left">문의유형</th><th className="p-2 text-right">건수</th></tr></thead>
+								<table className="table-card">
+									<thead className="thead"><tr><th className="p-2 text-left">문의유형</th><th className="p-2 text-right">건수</th></tr></thead>
 								<tbody>
 									{(items as InquiryCount[]).map((r, idx) => (
-										<tr key={idx} className="border-t">
+											<tr key={idx} className="border-t hover:bg-gray-50/60">
 											<td className="p-2">{r.inquiry_type ?? '(null)'}</td>
 											<td className="p-2 text-right">{r.ticket_count}</td>
 										</tr>
@@ -143,13 +143,13 @@ export default function InquiriesClient() {
 							</table>
 						)}
 						{mode === 'texts' && (
-							<table className="w-full text-sm">
-								<thead><tr className="bg-gray-50"><th className="p-2">문의유형</th><th className="p-2">티켓ID</th><th className="p-2">타입</th><th className="p-2">텍스트</th><th className="p-2">작성일</th></tr></thead>
+								<table className="table-card">
+									<thead className="thead"><tr><th className="p-2">문의유형</th><th className="p-2">티켓ID</th><th className="p-2">타입</th><th className="p-2">텍스트</th><th className="p-2">작성일</th></tr></thead>
 								<tbody>
 									{(items as InquiryText[])
 										.filter((r) => r && r.inquiry_type && !String(r.inquiry_type).startsWith('병원_'))
 										.map((r, idx) => (
-										<tr key={idx} className="border-t align-top">
+											<tr key={idx} className="border-t align-top hover:bg-gray-50/60">
 											<td className="p-2">{r.inquiry_type ?? '(null)'}</td>
 											<td className="p-2">{r.ticket_id}</td>
 											<td className="p-2">{r.text_type}</td>
