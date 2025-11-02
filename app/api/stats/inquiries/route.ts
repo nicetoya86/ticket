@@ -21,20 +21,30 @@ export async function GET(req: Request) {
     const isPhoneCall = (s: string): boolean => /((발신전화\s+to\s+\d+|수신전화\s+\d+)|전화구분\s*:\s*(수신전화|발신전화))/i.test(s);
     const isBotLine = (line: string): boolean => {
         const l = line.trim();
+        // Speaker or clear bot markers
         if (/^(\(\d{1,2}:\d{2}:\d{2}\)\s*)?여신BOT\b/i.test(l)) return true;
         if (/여신BOT님이\s*업로드함/i.test(l)) return true;
+        // Greetings and generic guidance from bot
+        if (/여신티켓에\s*관심을\s*가지고\s*이용해\s*주셔서\s*감사드립니다/i.test(l)) return true;
         if (/안녕하세요,\s*여신티켓입니다\./.test(l)) return true;
         if (/운영시간\s*:\s*/.test(l)) return true;
         if (/점심시간\s*:\s*/.test(l)) return true;
         if (/주말\s*및\s*공휴일\s*휴무/.test(l)) return true;
         if (/아래\s*2가지\s*방법/.test(l)) return true;
+        if (/아래\s*버튼을\s*눌러\s*내용\s*확인하기/.test(l)) return true;
         if (/키워드를\s*입력/.test(l)) return true;
         if (/\[처음으로\]/.test(l)) return true;
+        if (/^✅/u.test(l)) return true; // lines starting with check emoji
         if (/문의하신\s*내용에\s*도움이\s*될만한\s*답을\s*찾아드릴게요/.test(l)) return true;
         if (/문서\s*보기\s*:\s*/.test(l)) return true;
         if (/궁금하신\s*점이\s*해결되셨나요\??/i.test(l)) return true;
-        if (/^해결되었어요\.?$/.test(l)) return true;
-        if (/^해결되지\s*않았어요\.?$/.test(l)) return true;
+        if (/해결되었어요\.?/i.test(l)) return true;
+        if (/해결되지\s*않았어요\.?/i.test(l)) return true;
+        if (/:\s*해결되지\s*않았어요\.?$/i.test(l)) return true; // "iOS User ...: 해결되지 않았어요."
+        if (/자주\s*묻는\s*질문/i.test(l)) return true;
+        if (/문의할\s*내용을\s*다시\s*입력하기/i.test(l)) return true;
+        if (/순차적으로\s*안내를?\s*드리고\s*있어(\s*다소)?\s*시간이\s*소요될\s*수\s*있는\s*점\s*양해\s*부탁드립니다/i.test(l)) return true;
+        if (/^감사합니다\s*:?\s*\)?$/i.test(l)) return true;
         if (/담당\s*매니저를\s*연결해\s*드릴게요/.test(l)) return true;
         if (/정보\s*입력\s*감사합니다/.test(l)) return true;
         if (/^(회원가입\/계정|티켓\s*사용\/예약|시술\s*후기|쿠폰\/포인트|구매\/환불|앱\s*이용)/.test(l)) return true;
