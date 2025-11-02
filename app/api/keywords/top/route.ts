@@ -35,7 +35,19 @@ export async function GET(req: Request) {
             p_status: 'closed'
         });
         if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-        const rows = (data ?? []).filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === targetType);
+        let rows = (data ?? []).filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === targetType);
+        // Fallback: if no grouped rows, try non-grouped texts
+        if (rows.length === 0) {
+            const alt = await supabaseAdmin.rpc('inquiries_texts_by_type', {
+                p_from: fromDate,
+                p_to: toDate,
+                p_field_title: '문의유형(고객)',
+                p_status: 'closed'
+            });
+            if (!alt.error) {
+                rows = (alt.data ?? []).filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === targetType);
+            }
+        }
         // Extract only customer-authored text from aggregated blocks where speaker prefix appears
         function extractCustomerText(block: string): string {
             const lines = String(block ?? '').split('\n');
