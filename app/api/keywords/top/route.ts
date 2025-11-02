@@ -28,7 +28,11 @@ export async function GET(req: Request) {
         // Only customer lines (prefixed with "고객:")
         const customerText = rows
             .map((r: any) => String(r.text_value ?? ''))
-            .flatMap((t) => t.split('\n').filter((ln) => /^고객:\s*/.test(ln)).map((ln) => ln.replace(/^고객:\s*/, '')))
+            .flatMap((t: string) => t
+                .split('\n')
+                .filter((ln: string) => /^고객:\s*/.test(ln))
+                .map((ln: string) => ln.replace(/^고객:\s*/, ''))
+            )
             .join('\n');
         // Tokenize and aggregate
         const cleaned = customerText
