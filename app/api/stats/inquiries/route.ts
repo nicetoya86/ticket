@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server';
 
 export async function GET(req: Request) {
+    // If Supabase runtime config is missing in hosting env, return empty result instead of 500
+    const hasConfig = Boolean(process.env.SUPABASE_ANON_KEY && process.env.SUPABASE_SERVICE_ROLE_KEY && (process.env.SUPABASE_URL || process.env.SUPABASE_PROJECT_ID));
+    if (!hasConfig) {
+        return NextResponse.json({ items: [] }, { headers: { 'Cache-Control': 'no-store' } });
+    }
     // Lazy-load Supabase client to ensure env is available at runtime in Vercel
     const { supabaseAdmin } = await import('@/lib/supabaseServer');
     const { searchParams } = new URL(req.url);
