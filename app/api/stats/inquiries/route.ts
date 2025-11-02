@@ -70,7 +70,13 @@ export async function GET(req: Request) {
         const noRef = stripBackref(s);
         const lines = noRef.split('\n');
         const kept = lines.filter((ln) => !isBotLine(ln));
-        return kept.join('\n');
+        // Collapse excessive blank lines and trim spaces for better readability
+        let out = kept
+            .map((ln) => ln.replace(/[\t ]+/g, ' ').trimEnd())
+            .join('\n');
+        // remove leading/trailing blank lines and collapse 3+ newlines to 2
+        out = out.replace(/\n{3,}/g, '\n\n').replace(/[\t ]*\n[\t ]*/g, '\n').trim();
+        return out;
     };
 
     if (group || detail === 'texts') {
