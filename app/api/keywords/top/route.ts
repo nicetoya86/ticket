@@ -25,14 +25,27 @@ export async function GET(req: Request) {
         });
         if (error) return NextResponse.json({ error: error.message }, { status: 500 });
         const rows = (data ?? []).filter((r: any) => r?.inquiry_type === inquiryType);
-        // Only customer lines (prefixed with "고객:")
+        // Extract only customer-authored text from aggregated blocks where speaker prefix appears
+        function extractCustomerText(block: string): string {
+            const lines = String(block ?? '').split('\n');
+            let speaker: 'customer' | 'agent' | 'bot' | null = null;
+            const kept: string[] = [];
+            for (const raw of lines) {
+                const line: string = raw ?? '';
+                if (/^고객:\s*/.test(line)) {
+                    speaker = 'customer';
+                    kept.push(line.replace(/^고객:\s*/, ''));
+                    continue;
+                }
+                if (/^매니저:\s*/.test(line)) { speaker = 'agent'; continue; }
+                if (/^여신BOT:\s*/i.test(line)) { speaker = 'bot'; continue; }
+                if (speaker === 'customer') kept.push(line);
+            }
+            return kept.join('\n');
+        }
+
         const customerText = rows
-            .map((r: any) => String(r.text_value ?? ''))
-            .flatMap((t: string) => t
-                .split('\n')
-                .filter((ln: string) => /^고객:\s*/.test(ln))
-                .map((ln: string) => ln.replace(/^고객:\s*/, ''))
-            )
+            .map((r: any) => extractCustomerText(String(r.text_value ?? '')))
             .join('\n');
         // Tokenize and aggregate
         const cleaned = customerText
