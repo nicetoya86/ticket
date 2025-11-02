@@ -4,10 +4,8 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
 const links = [
-	{ href: '/', label: '개요' },
 	{ href: '/categories', label: '카테고리' },
 	{ href: '/keywords', label: '키워드' },
-	{ href: '/interactions', label: '드릴다운' },
 	{ href: '/inquiries', label: '문의유형' },
 	{ href: '/admin', label: '관리자' },
 ];

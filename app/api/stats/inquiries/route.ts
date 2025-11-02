@@ -34,8 +34,20 @@ export async function GET(req: Request) {
     }
 
     const { data, error } = await supabaseAdmin.rpc('unified_inquiries_by_type', { p_from: from, p_to: to, p_field_title: fieldTitle, p_status: status });
-    if (error) return NextResponse.json({ items: [], note: 'counts_error', message: error.message }, { status: 200, headers: { 'Cache-Control': 'no-store' } });
-    const items = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
+    let items = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
+    if (error || items.length === 0) {
+        // Fallback: derive counts from grouped texts
+        const fb = await supabaseAdmin.rpc('inquiries_texts_grouped_by_ticket', { p_from: from, p_to: to, p_field_title: fieldTitle, p_status: status });
+        if (!fb.error) {
+            const map = new Map<string, number>();
+            for (const row of fb.data ?? []) {
+                const t = row?.inquiry_type as string | null;
+                if (!t || String(t).startsWith('병원_')) continue;
+                map.set(t, (map.get(t) ?? 0) + 1);
+            }
+            items = Array.from(map.entries()).map(([inquiry_type, ticket_count]) => ({ inquiry_type, ticket_count })).sort((a, b) => b.ticket_count - a.ticket_count);
+        }
+    }
     return NextResponse.json({ items }, { headers: { 'Cache-Control': 'no-store' } });
 }
 
