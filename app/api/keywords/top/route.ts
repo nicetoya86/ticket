@@ -16,6 +16,17 @@ export async function GET(req: Request) {
 
     // Branch 1: On-demand keywords for selected inquiry type from customer texts only
     if (inquiryType) {
+        const normalizeType = (v: string): string => {
+            const s = (v ?? '').trim();
+            try {
+                if (/^\s*\[/.test(s)) {
+                    const parsed = JSON.parse(s);
+                    if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') return String(parsed[0]).trim();
+                }
+            } catch {}
+            return s;
+        };
+        const targetType = normalizeType(inquiryType);
         // Fetch grouped texts and derive keywords client-side to honor latest bot/manager filters
         const { data, error } = await supabaseAdmin.rpc('inquiries_texts_grouped_by_ticket', {
             p_from: fromDate,
@@ -24,7 +35,7 @@ export async function GET(req: Request) {
             p_status: 'closed'
         });
         if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-        const rows = (data ?? []).filter((r: any) => r?.inquiry_type === inquiryType);
+        const rows = (data ?? []).filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === targetType);
         // Extract only customer-authored text from aggregated blocks where speaker prefix appears
         function extractCustomerText(block: string): string {
             const lines = String(block ?? '').split('\n');

@@ -29,7 +29,17 @@ export default function KeywordsClient() {
 			if (!res.ok) { setError(`HTTP ${res.status}`); return; }
 			const json = await res.json();
 			if (ignore) return;
-			const options = (json.items ?? []) as InquiryOption[];
+			// Deduplicate inquiry types and sort by count desc
+			const seen = new Set<string>();
+			const options = ((json.items ?? []) as InquiryOption[])
+				.map((o) => ({ inquiry_type: normalizeType(o.inquiry_type), ticket_count: o.ticket_count }))
+				.filter((o) => {
+					if (!o.inquiry_type) return false;
+					if (seen.has(o.inquiry_type)) return false;
+					seen.add(o.inquiry_type);
+					return true;
+				})
+				.sort((a, b) => b.ticket_count - a.ticket_count);
 			setInquiries(options);
 		})();
 		return () => { ignore = true; };
@@ -37,11 +47,22 @@ export default function KeywordsClient() {
 
 	const canSearch = useMemo(() => Boolean(from && to && inquiryType), [from, to, inquiryType]);
 
+	function normalizeType(v: string): string {
+		const s = (v ?? '').trim();
+		try {
+			if (/^\[/.test(s)) {
+				const parsed = JSON.parse(s);
+				if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') return String(parsed[0]).trim();
+			}
+		} catch {}
+		return s;
+	}
+
 	async function onSearch() {
 		try {
 			setLoading(true);
 			setError(null);
-			const qs = new URLSearchParams({ from, to, inquiryType, limit: '10' });
+			const qs = new URLSearchParams({ from, to, inquiryType: normalizeType(inquiryType), limit: '10', source });
 			const res = await fetch(`/api/keywords/top?${qs.toString()}`, { cache: 'no-store' });
 			if (!res.ok) throw new Error(`HTTP ${res.status}`);
 			const json = await res.json();
@@ -57,11 +78,11 @@ export default function KeywordsClient() {
 		<div className="space-y-4">
 			<div className="card p-3 flex flex-wrap items-end gap-3 text-sm">
 				<label className="flex flex-col">
-					<span className="text-gray-600">From</span>
+					<span className="text-gray-600">시작일</span>
 					<input type="date" className="input" value={from} onChange={(e) => setFrom(e.target.value)} />
 				</label>
 				<label className="flex flex-col">
-					<span className="text-gray-600">To</span>
+					<span className="text-gray-600">종료일</span>
 					<input type="date" className="input" value={to} onChange={(e) => setTo(e.target.value)} />
 				</label>
 				<label className="flex flex-col">
@@ -76,7 +97,7 @@ export default function KeywordsClient() {
 					<select className="select" value={inquiryType} onChange={(e) => setInquiryType(e.target.value)}>
 						<option value="">(선택)</option>
 						{inquiries.map((opt, i) => (
-							<option key={i} value={opt.inquiry_type}>{opt.inquiry_type}</option>
+							<option key={`${opt.inquiry_type}-${i}`} value={opt.inquiry_type}>{opt.inquiry_type}</option>
 						))}
 					</select>
 				</label>
