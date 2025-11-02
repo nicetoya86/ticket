@@ -38,7 +38,9 @@ export async function GET(req: Request) {
         if (/아래\s*버튼(을)?\s*눌러\s*내용\s*확인하기/i.test(l)) return true;
         if (/키워드를\s*입력/.test(l)) return true;
         if (/\[처음으로\]/.test(l)) return true;
-        if (/^✅|^✔️|^➡️|^🔍️|^🔎️/u.test(l)) return true; // lines starting with these emojis
+        if (/^✅|^✔️|^➡️|^🔍️|^🔎️|^🔊️|^❗️|^👇️/u.test(l)) return true; // lines starting with these emojis
+        if (/유의\s*사항/iu.test(l)) return true;
+        if (/자세한\s*화면은\s*아래\s*이미지를\s*눌러주세요/iu.test(l)) return true;
         if (/문의하신\s*내용에\s*도움이\s*될만한\s*답을\s*찾아드릴게요/i.test(l)) return true;
         if (/문서\s*보기\s*:\s*/.test(l)) return true;
         if (/궁금하신\s*점이\s*해결되셨나요\??/i.test(l)) return true;
@@ -46,6 +48,13 @@ export async function GET(req: Request) {
         if (/해결되지\s*않았어요\.?/i.test(l)) return true;
         if (/:\s*해결되지\s*않았어요\.?$/i.test(l)) return true; // iOS User ...: 해결되지 않았어요.
         if (/자주\s*묻는\s*질문/i.test(l)) return true;
+        if (/^\d+\.\s*Q[\.\s]/i.test(l)) return true; // numbered Q.
+        if (/^\d+\.\s*A[\.\s]/i.test(l)) return true; // numbered A.
+        if (/구매\s*취소\s*시\s*환불은\s*언제\s*되나요\?/i.test(l)) return true;
+        if (/구매\s*후\s*1년\s*(이내|경과)\s*취소건/i.test(l)) return true;
+        if (/영업일\s*기준\s*최대\s*7일/i.test(l)) return true;
+        if (/쿠폰\/?포인트.*환급되나요\?/i.test(l)) return true;
+        if (/마이\s*>\s*구매\s*목록\s*>\s*구매\s*취소하기/i.test(l)) return true;
         if (/문의할\s*내용을\s*다시\s*입력하기/i.test(l)) return true;
         if (/순차적으로\s*안내를?\s*드리고\s*있어(\s*다소)?\s*시간이\s*소요될\s*수\s*있는\s*점\s*양해\s*부탁드립니다/i.test(l)) return true;
         if (/^감사합니다\s*:?\s*\)?$/i.test(l)) return true;
