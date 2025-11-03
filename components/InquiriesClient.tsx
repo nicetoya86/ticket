@@ -1,168 +1,138 @@
 "use client";
 
 import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 
-type InquiryCount = { inquiry_type: string | null; ticket_count: number };
-type InquiryUser = { inquiry_type: string | null; ticket_id: number; requester: string | null; subject: string; created_at: string };
 type InquiryText = { inquiry_type: string | null; ticket_id: number; created_at: string; text_type: string; text_value: string };
+type InquiryOption = { inquiry_type: string; ticket_count: number };
 
 export default function InquiriesClient() {
-	const sp = useSearchParams();
-	const router = useRouter();
-	const pathname = usePathname();
+    const [from, setFrom] = useState<string>('');
+    const [to, setTo] = useState<string>('');
+    const [status, setStatus] = useState<string>('closed');
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [inquiryType, setInquiryType] = useState<string>('');
+    const [options, setOptions] = useState<InquiryOption[]>([]);
+    const [items, setItems] = useState<InquiryText[]>([]);
 
-	const [loading, setLoading] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-	const [items, setItems] = useState<any[]>([]);
+    function normalizeType(v: string): string {
+        const s = (v ?? '').trim();
+        try {
+            if (/^\[/.test(s)) {
+                const p = JSON.parse(s);
+                if (Array.isArray(p) && p.length > 0 && typeof p[0] === 'string') return String(p[0]).trim();
+            }
+        } catch {}
+        return s;
+    }
 
-	const from = sp.get('from') ?? '';
-	const to = sp.get('to') ?? '';
-	const rawMode = sp.get('mode') ?? 'counts';
-	const mode = rawMode === 'users' ? 'counts' : rawMode; // counts | texts (users 제거)
-	const group = sp.get('group');
-	const groupEffective = mode === 'texts' ? (group === '0' ? '0' : '1') : '0'; // default group ON for texts
-	const status = sp.get('status') ?? 'closed';
-	const fieldTitle = sp.get('fieldTitle') ?? '문의유형(고객)';
+    // 1단계: 검색 → 기간/상태에 텍스트가 실제 존재하는 문의유형 로드
+    async function loadInquiryOptions() {
+        try {
+            setLoading(true);
+            setError(null);
+            setItems([]);
+            const qs = new URLSearchParams({ fieldTitle: '문의유형(고객)', detail: 'texts' });
+            if (from) qs.set('from', from);
+            if (to) qs.set('to', to);
+            if (status) qs.set('status', status);
+            const res = await fetch(`/api/stats/inquiries?${qs.toString()}`, { cache: 'no-store' });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const json = await res.json();
+            const map = new Map<string, Set<number>>();
+            for (const r of (json.items ?? []) as any[]) {
+                const t = normalizeType(String(r?.inquiry_type ?? ''));
+                if (!t) continue;
+                const tid = Number(r?.ticket_id ?? 0);
+                if (!map.has(t)) map.set(t, new Set());
+                if (tid) map.get(t)!.add(tid);
+            }
+            const opts = Array.from(map.entries()).map(([inquiry_type, ids]) => ({ inquiry_type, ticket_count: ids.size })).sort((a, b) => b.ticket_count - a.ticket_count);
+            setOptions(opts);
+        } catch (e: any) {
+            setError(e.message ?? 'failed');
+        } finally {
+            setLoading(false);
+        }
+    }
 
-	const update = (patch: Record<string, string | null>) => {
-		const params = new URLSearchParams(sp.toString());
-		for (const [k, v] of Object.entries(patch)) {
-			if (v === null || v === '') params.delete(k); else params.set(k, v);
-		}
-		router.push(`${pathname}?${params.toString()}`);
-	};
+    // 2단계: 문의유형 선택 후 내용 확인 → body 기반 텍스트 조회
+    async function loadTexts() {
+        try {
+            setLoading(true);
+            setError(null);
+            const qs = new URLSearchParams({ fieldTitle: '문의유형(고객)', detail: 'texts' });
+            if (from) qs.set('from', from);
+            if (to) qs.set('to', to);
+            if (status) qs.set('status', status);
+            const res = await fetch(`/api/stats/inquiries?${qs.toString()}`, { cache: 'no-store' });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const json = await res.json();
+            const t = normalizeType(inquiryType);
+            const rows: InquiryText[] = (json.items ?? []).filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === t);
+            setItems(rows);
+        } catch (e: any) {
+            setError(e.message ?? 'failed');
+        } finally {
+            setLoading(false);
+        }
+    }
 
-	useEffect(() => {
-		const controller = new AbortController();
-		(async () => {
-			try {
-				setLoading(true);
-				setError(null);
-				const qs = new URLSearchParams();
-				if (from) qs.set('from', from);
-				if (to) qs.set('to', to);
-				if (status) qs.set('status', status);
-				if (fieldTitle) qs.set('fieldTitle', fieldTitle);
-				if (mode === 'texts') qs.set('detail', 'texts');
-				if (groupEffective === '1') qs.set('group', '1'); else qs.delete('group');
-				const res = await fetch(`/api/stats/inquiries?${qs.toString()}`, { signal: controller.signal, cache: 'no-store' });
-				if (!res.ok) throw new Error(`HTTP ${res.status}`);
-				const json = await res.json();
-				setItems(json.items ?? []);
-			} catch (e: any) {
-				if (e.name !== 'AbortError') setError(e.message ?? 'failed');
-			} finally {
-				setLoading(false);
-			}
-		})();
-		return () => controller.abort();
-	}, [from, to, mode, status, fieldTitle, groupEffective, sp]);
+    const canSearch = useMemo(() => Boolean(from && to), [from, to]);
+    const canAnalyze = useMemo(() => Boolean(canSearch && inquiryType), [canSearch, inquiryType]);
 
-	const title = useMemo(() => {
-		if (mode === 'users') return '문의유형별 유저/티켓';
-		if (mode === 'texts') return '문의유형별 텍스트(제목/코멘트)';
-		return '문의유형별 집계';
-	}, [mode]);
+    return (
+        <div className="space-y-4">
+            <div className="mt-4 p-3 card flex flex-wrap items-end gap-3 text-sm">
+                <label className="flex flex-col">
+                    <span className="text-gray-600">시작일</span>
+                    <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="input" />
+                </label>
+                <label className="flex flex-col">
+                    <span className="text-gray-600">종료일</span>
+                    <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="input" />
+                </label>
+                <label className="flex flex-col">
+                    <span className="text-gray-600">Status</span>
+                    <select value={status} onChange={(e) => setStatus(e.target.value)} className="select">
+                        <option value="closed">closed</option>
+                        <option value="solved">solved</option>
+                        <option value="open">open</option>
+                        <option value="pending">pending</option>
+                        <option value="hold">hold</option>
+                        <option value="">(all)</option>
+                    </select>
+                </label>
+                <button disabled={!canSearch || loading} className="btn-outline disabled:opacity-50" onClick={loadInquiryOptions}>검색</button>
+                <label className="flex flex-col min-w-64">
+                    <span className="text-gray-600">문의유형</span>
+                    <select className="select" value={inquiryType} onChange={(e) => setInquiryType(e.target.value)} disabled={options.length === 0}>
+                        <option value="">(선택)</option>
+                        {options.map((o, i) => (
+                            <option key={`${o.inquiry_type}-${i}`} value={o.inquiry_type}>{o.inquiry_type}</option>
+                        ))}
+                    </select>
+                </label>
+                <button disabled={!canAnalyze || loading} className="btn-outline disabled:opacity-50" onClick={loadTexts}>내용 확인</button>
+            </div>
 
-	return (
-		<div>
-			<h2 className="text-lg font-semibold">{title}</h2>
-			<div className="mt-4 p-3 card flex flex-wrap items-center gap-3 text-sm">
-				<label className="flex items-center gap-2">
-					<span className="text-gray-600">From</span>
-					<input type="date" value={from} onChange={(e) => update({ from: e.target.value || null })} className="input" />
-				</label>
-				<label className="flex items-center gap-2">
-					<span className="text-gray-600">To</span>
-					<input type="date" value={to} onChange={(e) => update({ to: e.target.value || null })} className="input" />
-				</label>
-				<label className="flex items-center gap-2">
-					<span className="text-gray-600">Status</span>
-					<select value={status} onChange={(e) => update({ status: e.target.value })} className="select">
-						<option value="closed">closed</option>
-						<option value="solved">solved</option>
-						<option value="open">open</option>
-						<option value="pending">pending</option>
-						<option value="hold">hold</option>
-						<option value="">(all)</option>
-					</select>
-				</label>
-				<label className="flex items-center gap-2">
-					<span className="text-gray-600">Field</span>
-					<input type="text" value={fieldTitle} onChange={(e) => update({ fieldTitle: e.target.value || null })} className="input" placeholder="문의유형(고객)" />
-				</label>
-				<label className="flex items-center gap-2">
-					<span className="text-gray-600">Mode</span>
-					<select value={mode} onChange={(e) => update({ mode: e.target.value })} className="select">
-						<option value="counts">counts</option>
-						<option value="users">users</option>
-						<option value="texts">texts</option>
-					</select>
-				</label>
-				{mode === 'texts' && (
-					<label className="flex items-center gap-2">
-						<input type="checkbox" checked={groupEffective === '1'} onChange={(e) => update({ group: e.target.checked ? '1' : '0' })} />
-						<span className="text-gray-600">Group by ticket</span>
-					</label>
-				)}
-			</div>
-
-			<div className="mt-6">
-				{loading && <div className="text-gray-500">로딩 중...</div>}
-				{error && <div className="text-red-600">에러: {error}</div>}
-				{!loading && !error && (
-						<div className="card overflow-hidden">
-						{mode === 'counts' && (
-								<table className="table-card">
-									<thead className="thead"><tr><th className="p-2 text-left">문의유형</th><th className="p-2 text-right">건수</th></tr></thead>
-								<tbody>
-									{(items as InquiryCount[]).map((r, idx) => (
-											<tr key={idx} className="border-t hover:bg-gray-50/60">
-											<td className="p-2">{r.inquiry_type ?? '(null)'}</td>
-											<td className="p-2 text-right">{r.ticket_count}</td>
-										</tr>
-									))}
-								</tbody>
-							</table>
-						)}
-						{mode === 'users' && (
-							<table className="w-full text-sm">
-								<thead><tr className="bg-gray-50"><th className="p-2">문의유형</th><th className="p-2">티켓ID</th><th className="p-2">요청자</th><th className="p-2">제목</th><th className="p-2">생성일</th></tr></thead>
-								<tbody>
-									{(items as InquiryUser[]).map((r, idx) => (
-										<tr key={idx} className="border-t">
-											<td className="p-2">{r.inquiry_type ?? '(null)'}</td>
-											<td className="p-2">{r.ticket_id}</td>
-											<td className="p-2">{r.requester ?? ''}</td>
-											<td className="p-2">{r.subject}</td>
-											<td className="p-2">{new Date(r.created_at).toLocaleString()}</td>
-										</tr>
-									))}
-								</tbody>
-							</table>
-						)}
-						{mode === 'texts' && (
-								<table className="table-card">
-									<thead className="thead"><tr><th className="p-2">문의유형</th><th className="p-2">티켓ID</th><th className="p-2">타입</th><th className="p-2">텍스트</th><th className="p-2">작성일</th></tr></thead>
-								<tbody>
-									{(items as InquiryText[])
-										.filter((r) => r && r.inquiry_type && !String(r.inquiry_type).startsWith('병원_'))
-										.map((r, idx) => (
-											<tr key={idx} className="border-t align-top hover:bg-gray-50/60">
-											<td className="p-2">{r.inquiry_type ?? '(null)'}</td>
-											<td className="p-2">{r.ticket_id}</td>
-											<td className="p-2">{r.text_type}</td>
-											<td className="p-2 whitespace-pre-wrap break-words max-w-[48rem]">{r.text_value}</td>
-											<td className="p-2">{new Date(r.created_at).toLocaleString()}</td>
-										</tr>
-									))}
-								</tbody>
-							</table>
-						)}
-					</div>
-				)}
-			</div>
-		</div>
-	);
+            <div className="card overflow-hidden">
+                <table className="table-card">
+                    <thead className="thead"><tr><th className="p-2">문의유형</th><th className="p-2">티켓ID</th><th className="p-2">내용</th></tr></thead>
+                    <tbody>
+                        {items.map((r, idx) => (
+                            <tr key={idx} className="border-t align-top hover:bg-gray-50/60">
+                                <td className="p-2">{normalizeType(String(r.inquiry_type ?? ''))}</td>
+                                <td className="p-2">{r.ticket_id}</td>
+                                <td className="p-2 whitespace-pre-wrap break-words max-w-[64rem]">{r.text_value}</td>
+                            </tr>
+                        ))}
+                        {items.length === 0 && (
+                            <tr><td colSpan={3} className="p-6 text-center text-gray-500">{loading ? '로딩 중...' : (error || (options.length === 0 ? '날짜와 상태를 선택한 뒤 검색을 눌러 문의유형을 불러오세요.' : '문의유형을 선택한 뒤 내용 확인을 눌러 주세요.'))}</td></tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
 }
