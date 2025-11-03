@@ -54,8 +54,9 @@ export async function GET(req: Request) {
         function extractCustomerText(block: string): string {
             const lines = String(block ?? '').split('\n');
             const isBotName = (name: string) => /(여신BOT|\bBOT\b)/i.test(name);
-            const isAgentName = (name: string) => /(매니저|Manager|관리자|Agent|상담사)/i.test(name);
-            const isUserName = (name: string) => /(iOS|Android|Web)\s*User|End[\s-]*user|Visitor|고객|사용자|유저/i.test(name);
+            // 상담사 표기 또는 한글 2~4글자 단일 이름은 에이전트로 간주 (예: 조수민)
+            const isAgentName = (name: string) => /(매니저|Manager|관리자|Agent|상담사)/i.test(name) || /^[가-힣]{2,4}$/.test(name);
+            const isUserName = (name: string) => /(iOS|Android|Web)\s*User|End[\s-]*user|Visitor|고객|사용자|유저|손님/i.test(name);
             let current: 'customer' | 'agent' | 'bot' | null = null;
             const out: string[] = [];
             for (const raw of lines) {
@@ -66,8 +67,8 @@ export async function GET(req: Request) {
                     const text = m[2];
                     if (isBotName(name)) { current = 'bot'; continue; }
                     if (isAgentName(name)) { current = 'agent'; continue; }
-                    // treat everything else (including iOS/Android/Web User, 고객/사용자 등) as customer
-                    current = 'customer';
+                    // 명시적 사용자 패턴만 고객으로 인정, 그 외 모호한 이름은 에이전트로 간주
+                    if (isUserName(name)) { current = 'customer'; } else { current = 'agent'; continue; }
                     out.push(text);
                     continue;
                 }
@@ -76,8 +77,8 @@ export async function GET(req: Request) {
             return out.join('\n');
         }
         const blocks: string[] = rows.map((r: any) => String(r.text_value ?? ''));
-        // 고객/매니저/봇 접두사가 있는 경우에만 고객 텍스트를 수집한다.
-        const hasSpeakerPrefixes = blocks.some((b) => /^(고객|매니저|여신BOT):/m.test(b));
+        // 접두사(이름:)가 한 줄이라도 존재하면 스피커 인식 파서를 사용
+        const hasSpeakerPrefixes = blocks.some((b) => /^[^:\n]+:/m.test(b));
         const customerText = hasSpeakerPrefixes
             ? blocks.map((b) => extractCustomerText(b)).join('\n')
             : '';
