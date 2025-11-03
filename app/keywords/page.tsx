@@ -11,7 +11,7 @@ export default function KeywordsPage() {
 					<span className="text-2xl">🔎</span>
 					<h1 className="text-2xl font-bold tracking-tight">키워드 분석</h1>
 				</div>
-				<p className="mt-2 text-sm text-white/90">날짜와 Source, 문의유형을 선택하면 고객 텍스트 기준 상위 키워드 10개를 보여드립니다.</p>
+				<p className="mt-2 text-sm text-white/90">날짜와 채널, 문의유형을 선택하면 고객 텍스트 기준 상위 키워드 10개를 보여드립니다.</p>
 			</div>
 			<div className="h-6" />
 			<Suspense fallback={null}>
