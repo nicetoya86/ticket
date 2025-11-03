@@ -50,23 +50,30 @@ export async function GET(req: Request) {
                 rows = (retry.data ?? []).filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === targetType);
             }
         }
-        // Extract only customer-authored text from aggregated blocks where speaker prefix appears
+        // Extract only customer-authored text from aggregated blocks (robust speaker-aware)
         function extractCustomerText(block: string): string {
             const lines = String(block ?? '').split('\n');
-            let speaker: 'customer' | 'agent' | 'bot' | null = null;
-            const kept: string[] = [];
+            const isBotName = (name: string) => /(여신BOT|\bBOT\b)/i.test(name);
+            const isAgentName = (name: string) => /(매니저|Manager|관리자|Agent|상담사)/i.test(name);
+            const isUserName = (name: string) => /(iOS|Android|Web)\s*User|End[\s-]*user|Visitor|고객|사용자|유저/i.test(name);
+            let current: 'customer' | 'agent' | 'bot' | null = null;
+            const out: string[] = [];
             for (const raw of lines) {
-                const line: string = raw ?? '';
-                if (/^고객:\s*/.test(line)) {
-                    speaker = 'customer';
-                    kept.push(line.replace(/^고객:\s*/, ''));
+                const line = String(raw ?? '');
+                const m = line.match(/^\s*(?:\(\d{1,2}:\d{2}:\d{2}\)\s*)?([^:]+):\s*(.*)$/);
+                if (m) {
+                    const name = m[1].trim();
+                    const text = m[2];
+                    if (isBotName(name)) { current = 'bot'; continue; }
+                    if (isAgentName(name)) { current = 'agent'; continue; }
+                    // treat everything else (including iOS/Android/Web User, 고객/사용자 등) as customer
+                    current = 'customer';
+                    out.push(text);
                     continue;
                 }
-                if (/^매니저:\s*/.test(line)) { speaker = 'agent'; continue; }
-                if (/^여신BOT:\s*/i.test(line)) { speaker = 'bot'; continue; }
-                if (speaker === 'customer') kept.push(line);
+                if (current === 'customer') out.push(line);
             }
-            return kept.join('\n');
+            return out.join('\n');
         }
         const blocks: string[] = rows.map((r: any) => String(r.text_value ?? ''));
         // 고객/매니저/봇 접두사가 있는 경우에만 고객 텍스트를 수집한다.
