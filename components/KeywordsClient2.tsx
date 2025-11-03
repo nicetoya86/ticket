@@ -7,7 +7,7 @@ type TopPhrase = { phrase: string; freq: number };
 
 type InquiryOption = { inquiry_type: string; ticket_count: number };
 
-export default function KeywordsClient() {
+export default function KeywordsClient({ initialTab = 'keywords' }: { initialTab?: 'keywords' | 'phrases' } = {}) {
 	const [from, setFrom] = useState<string>(() => new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString().slice(0, 10));
 	const [to, setTo] = useState<string>(() => new Date().toISOString().slice(0, 10));
 	const [source, setSource] = useState<'zendesk' | 'channel'>('zendesk');
@@ -17,7 +17,7 @@ export default function KeywordsClient() {
 	const [phrases, setPhrases] = useState<TopPhrase[]>([]);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const [activeTab, setActiveTab] = useState<'keywords' | 'phrases'>('keywords');
+	const [activeTab, setActiveTab] = useState<'keywords' | 'phrases'>(initialTab);
 
 	// 날짜/채널 변경 시 상태 초기화(문의유형은 검색 버튼으로 불러오도록 변경)
 	useEffect(() => {

@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 const links = [
 	{ href: '/categories', label: '카테고리' },
 	{ href: '/keywords', label: '키워드' },
+	{ href: '/phrases', label: '문의 내용' },
 	{ href: '/inquiries', label: '문의유형' },
 	{ href: '/admin', label: '관리자' },
 ];
