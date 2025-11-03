@@ -38,19 +38,21 @@ export default function KeywordsClient() {
 	}
 
 	async function fetchInquiryOptions() {
-		const qs = new URLSearchParams({ from, to, fieldTitle: '문의유형(고객)', status: 'closed', source });
+		// 텍스트가 실제 존재하는 문의유형만 옵션으로 제공하기 위해 texts 상세로 조회 후 집계
+		const qs = new URLSearchParams({ from, to, fieldTitle: '문의유형(고객)', status: 'closed', detail: 'texts', source });
 		const res = await fetch(`/api/stats/inquiries?${qs.toString()}`, { cache: 'no-store' });
 		if (!res.ok) throw new Error(`HTTP ${res.status}`);
 		const json = await res.json();
-		const seen = new Set<string>();
-		const options = ((json.items ?? []) as InquiryOption[])
-			.map((o) => ({ inquiry_type: normalizeType(o.inquiry_type), ticket_count: o.ticket_count }))
-			.filter((o) => {
-				if (!o.inquiry_type) return false;
-				if (seen.has(o.inquiry_type)) return false;
-				seen.add(o.inquiry_type);
-				return true;
-			})
+		const map = new Map<string, Set<number>>();
+		for (const r of (json.items ?? []) as any[]) {
+			const t = normalizeType(String(r?.inquiry_type ?? ''));
+			if (!t) continue;
+			const tid = Number(r?.ticket_id ?? 0);
+			if (!map.has(t)) map.set(t, new Set());
+			if (tid) map.get(t)!.add(tid);
+		}
+		const options = Array.from(map.entries())
+			.map(([inquiry_type, ids]) => ({ inquiry_type, ticket_count: ids.size }))
 			.sort((a, b) => b.ticket_count - a.ticket_count);
 		setInquiries(options);
 	}
