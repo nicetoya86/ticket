@@ -49,8 +49,25 @@ export default function InquiriesClient() {
                 if (!map.has(t)) map.set(t, new Set());
                 if (tid) map.get(t)!.add(tid);
             }
-            const opts = Array.from(map.entries()).map(([inquiry_type, ids]) => ({ inquiry_type, ticket_count: ids.size })).sort((a, b) => b.ticket_count - a.ticket_count);
+            let opts = Array.from(map.entries()).map(([inquiry_type, ids]) => ({ inquiry_type, ticket_count: ids.size })).sort((a, b) => b.ticket_count - a.ticket_count);
+            // Fallback: 텍스트가 없으면 counts 기반으로라도 유형을 제공해 드롭다운을 활성화
+            if (opts.length === 0) {
+                const qs2 = new URLSearchParams({ fieldTitle: '문의유형(고객)' });
+                if (from) qs2.set('from', from);
+                if (to) qs2.set('to', to);
+                if (status) qs2.set('status', status);
+                if (source) qs2.set('source', source);
+                const r2 = await fetch(`/api/stats/inquiries?${qs2.toString()}`, { cache: 'no-store' });
+                if (r2.ok) {
+                    const j2 = await r2.json();
+                    opts = ((j2.items ?? []) as any[])
+                        .map((o: any) => ({ inquiry_type: normalizeType(String(o.inquiry_type ?? '')), ticket_count: Number(o.ticket_count ?? 0) }))
+                        .filter((o: any) => o.inquiry_type)
+                        .sort((a: any, b: any) => b.ticket_count - a.ticket_count);
+                }
+            }
             setOptions(opts);
+            if (opts.length > 0) setInquiryType('');
         } catch (e: any) {
             setError(e.message ?? 'failed');
         } finally {
