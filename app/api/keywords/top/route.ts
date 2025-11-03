@@ -28,15 +28,28 @@ export async function GET(req: Request) {
         };
         const targetType = normalizeType(inquiryType);
         // Fetch grouped texts and derive keywords client-side to honor latest bot/manager filters
+        // 1차: 상태 제한 없이 전체 상태에서 조회 (일부 기간은 closed 기준으로 비어있음)
         const { data, error } = await supabaseAdmin.rpc('inquiries_texts_grouped_by_ticket', {
             p_from: fromDate,
             p_to: toDate,
             p_field_title: '문의유형(고객)',
-            p_status: 'closed'
+            p_status: ''
         });
         if (error) return NextResponse.json({ error: error.message }, { status: 500 });
         let rows = (data ?? []).filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === targetType);
         // Fallback: if no grouped rows, try non-grouped texts
+        if (rows.length === 0) {
+            // 2차: closed 한정으로 다시 시도
+            const retry = await supabaseAdmin.rpc('inquiries_texts_grouped_by_ticket', {
+                p_from: fromDate,
+                p_to: toDate,
+                p_field_title: '문의유형(고객)',
+                p_status: 'closed'
+            });
+            if (!retry.error) {
+                rows = (retry.data ?? []).filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === targetType);
+            }
+        }
         if (rows.length === 0) {
             const alt = await supabaseAdmin.rpc('inquiries_texts_by_type', {
                 p_from: fromDate,
