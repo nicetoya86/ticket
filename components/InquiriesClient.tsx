@@ -9,6 +9,7 @@ export default function InquiriesClient() {
     const [from, setFrom] = useState<string>('');
     const [to, setTo] = useState<string>('');
     const [status, setStatus] = useState<string>('closed');
+    const [source, setSource] = useState<'zendesk' | 'channel'>('zendesk');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [inquiryType, setInquiryType] = useState<string>('');
@@ -36,6 +37,7 @@ export default function InquiriesClient() {
             if (from) qs.set('from', from);
             if (to) qs.set('to', to);
             if (status) qs.set('status', status);
+            if (source) qs.set('source', source);
             const res = await fetch(`/api/stats/inquiries?${qs.toString()}`, { cache: 'no-store' });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const json = await res.json();
@@ -65,6 +67,7 @@ export default function InquiriesClient() {
             if (from) qs.set('from', from);
             if (to) qs.set('to', to);
             if (status) qs.set('status', status);
+            if (source) qs.set('source', source);
             const res = await fetch(`/api/stats/inquiries?${qs.toString()}`, { cache: 'no-store' });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const json = await res.json();
@@ -91,6 +94,13 @@ export default function InquiriesClient() {
                 <label className="flex flex-col">
                     <span className="text-gray-600">종료일</span>
                     <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="input" />
+                </label>
+                <label className="flex flex-col">
+                    <span className="text-gray-600">채널</span>
+                    <select value={source} onChange={(e) => setSource(e.target.value as any)} className="select">
+                        <option value="zendesk">젠데스크</option>
+                        <option value="channel">채널톡</option>
+                    </select>
                 </label>
                 <label className="flex flex-col">
                     <span className="text-gray-600">Status</span>
