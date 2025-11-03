@@ -80,7 +80,7 @@ export default function InquiriesClient() {
         try {
             setLoading(true);
             setError(null);
-            const qs = new URLSearchParams({ fieldTitle: '문의유형(고객)', detail: 'texts' });
+            const qs = new URLSearchParams({ fieldTitle: '문의유형(고객)', detail: 'texts', inquiryType: normalizeType(inquiryType) });
             if (from) qs.set('from', from);
             if (to) qs.set('to', to);
             if (status) qs.set('status', status);

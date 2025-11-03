@@ -13,6 +13,8 @@ export async function GET(req: Request) {
     const to = searchParams.get('to') ?? new Date().toISOString().slice(0, 10);
     const fieldTitle = searchParams.get('fieldTitle') ?? '문의유형(고객)';
     const status = searchParams.get('status') ?? 'closed';
+    const inquiryTypeParam = searchParams.get('inquiryType') ?? '';
+    const source = searchParams.get('source') ?? '';
     const group = searchParams.get('group') === '1' || searchParams.get('group') === 'true';
     const detail = searchParams.get('detail') ?? '';
 
@@ -102,6 +104,17 @@ export async function GET(req: Request) {
         return out;
     };
 
+    const normalizeType = (v: string): string => {
+        const s = (v ?? '').trim();
+        try {
+            if (/^\s*\[/.test(s)) {
+                const parsed = JSON.parse(s);
+                if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') return String(parsed[0]).trim();
+            }
+        } catch {}
+        return s;
+    };
+
     // texts: always return raw body-derived texts; ignore group to honor "body only" requirement
     if (detail === 'texts') {
         const { data, error } = await supabaseAdmin.rpc('inquiries_texts_by_type', { p_from: from, p_to: to, p_field_title: fieldTitle, p_status: status });
@@ -113,7 +126,9 @@ export async function GET(req: Request) {
         for (const r of cleaned) {
             if (isPhoneCall(String(r.text_value ?? ''))) excludeTickets.add(Number(r.ticket_id));
         }
-        items = cleaned.filter((r: any) => !excludeTickets.has(Number(r.ticket_id)) && String(r.text_value ?? '').trim().length > 0);
+        items = cleaned
+            .filter((r: any) => !excludeTickets.has(Number(r.ticket_id)) && String(r.text_value ?? '').trim().length > 0)
+            .filter((r: any) => (inquiryTypeParam ? normalizeType(String(r.inquiry_type ?? '')) === normalizeType(inquiryTypeParam) : true));
         return NextResponse.json({ items }, { headers: { 'Cache-Control': 'no-store' } });
     } else if (group) {
         const { data, error } = await supabaseAdmin.rpc('inquiries_texts_grouped_by_ticket', { p_from: from, p_to: to, p_field_title: fieldTitle, p_status: status });
