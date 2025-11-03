@@ -39,7 +39,7 @@ export async function GET(req: Request) {
         let rows = (data ?? []).filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === targetType);
         // Fallback: if no grouped rows, try non-grouped texts
         if (rows.length === 0) {
-            // 2차: closed 한정으로 다시 시도
+            // 2차: closed 한정으로 다시 시도(그룹형만 사용해 발화자 구분을 보장)
             const retry = await supabaseAdmin.rpc('inquiries_texts_grouped_by_ticket', {
                 p_from: fromDate,
                 p_to: toDate,
@@ -48,17 +48,6 @@ export async function GET(req: Request) {
             });
             if (!retry.error) {
                 rows = (retry.data ?? []).filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === targetType);
-            }
-        }
-        if (rows.length === 0) {
-            const alt = await supabaseAdmin.rpc('inquiries_texts_by_type', {
-                p_from: fromDate,
-                p_to: toDate,
-                p_field_title: '문의유형(고객)',
-                p_status: 'closed'
-            });
-            if (!alt.error) {
-                rows = (alt.data ?? []).filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === targetType);
             }
         }
         // Extract only customer-authored text from aggregated blocks where speaker prefix appears
@@ -80,10 +69,11 @@ export async function GET(req: Request) {
             return kept.join('\n');
         }
         const blocks: string[] = rows.map((r: any) => String(r.text_value ?? ''));
+        // 고객/매니저/봇 접두사가 있는 경우에만 고객 텍스트를 수집한다.
         const hasSpeakerPrefixes = blocks.some((b) => /^(고객|매니저|여신BOT):/m.test(b));
         const customerText = hasSpeakerPrefixes
             ? blocks.map((b) => extractCustomerText(b)).join('\n')
-            : blocks.join('\n'); // fallback: treat as customer-only when no explicit speakers present
+            : '';
         // Tokenize and aggregate
         const cleaned = customerText
             .replace(/https?:\/\/\S+/g, ' ')
