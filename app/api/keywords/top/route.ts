@@ -79,10 +79,11 @@ export async function GET(req: Request) {
             }
             return kept.join('\n');
         }
-
-        const customerText = rows
-            .map((r: any) => extractCustomerText(String(r.text_value ?? '')))
-            .join('\n');
+        const blocks: string[] = rows.map((r: any) => String(r.text_value ?? ''));
+        const hasSpeakerPrefixes = blocks.some((b) => /^(고객|매니저|여신BOT):/m.test(b));
+        const customerText = hasSpeakerPrefixes
+            ? blocks.map((b) => extractCustomerText(b)).join('\n')
+            : blocks.join('\n'); // fallback: treat as customer-only when no explicit speakers present
         // Tokenize and aggregate
         const cleaned = customerText
             .replace(/https?:\/\/\S+/g, ' ')
