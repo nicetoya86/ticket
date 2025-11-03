@@ -103,6 +103,15 @@ export async function GET(req: Request) {
         out = out.replace(/\n{3,}/g, '\n\n').replace(/[\t ]*\n[\t ]*/g, '\n').trim();
         return out;
     };
+    // Narrow variant for texts mode: remove only speaker lines starting with 여신BOT (optionally prefixed by timestamp)
+    const cleanTextBodyOnly = (s: string): string => {
+        const noRef = stripBackref(s);
+        const lines = noRef.split('\n');
+        const kept = lines.filter((ln) => !/^\s*(?:\(\d{1,2}:\d{2}:\d{2}\)\s*)?여신BOT\b/i.test(ln.trim()));
+        let out = kept.map((ln) => ln.replace(/[\t ]+/g, ' ').trimEnd()).join('\n');
+        out = out.replace(/\n{3,}/g, '\n\n').replace(/[\t ]*\n[\t ]*/g, '\n').trim();
+        return out;
+    };
 
     const normalizeType = (v: string): string => {
         const s = (v ?? '').trim();
@@ -121,7 +130,7 @@ export async function GET(req: Request) {
         if (error) return NextResponse.json({ items: [], note: 'texts_error', message: error.message }, { status: 200, headers: { 'Cache-Control': 'no-store' } });
         let items = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
         // compute exclusion set by ticket_id if any row indicates phone call classification, and drop empty rows
-        const cleaned = items.map((r: any) => ({ ...r, text_value: cleanText(String(r.text_value ?? '')) }));
+        const cleaned = items.map((r: any) => ({ ...r, text_value: cleanTextBodyOnly(String(r.text_value ?? '')) }));
         const excludeTickets = new Set<number>();
         for (const r of cleaned) {
             if (isPhoneCall(String(r.text_value ?? ''))) excludeTickets.add(Number(r.ticket_id));
