@@ -16,36 +16,15 @@ export default function KeywordsClient() {
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
-	// Load inquiry types when date/source changes
+	// 날짜/채널 변경 시 상태 초기화(문의유형은 검색 버튼으로 불러오도록 변경)
 	useEffect(() => {
-		let ignore = false;
-		(async () => {
-			setInquiryType('');
-			setItems([]);
-			setError(null);
-			// Use existing stats API to fetch inquiry counts (serves as options)
-			const qs = new URLSearchParams({ from, to, fieldTitle: '문의유형(고객)', status: 'closed' });
-			const res = await fetch(`/api/stats/inquiries?${qs.toString()}`, { cache: 'no-store' });
-			if (!res.ok) { setError(`HTTP ${res.status}`); return; }
-			const json = await res.json();
-			if (ignore) return;
-			// Deduplicate inquiry types and sort by count desc
-			const seen = new Set<string>();
-			const options = ((json.items ?? []) as InquiryOption[])
-				.map((o) => ({ inquiry_type: normalizeType(o.inquiry_type), ticket_count: o.ticket_count }))
-				.filter((o) => {
-					if (!o.inquiry_type) return false;
-					if (seen.has(o.inquiry_type)) return false;
-					seen.add(o.inquiry_type);
-					return true;
-				})
-				.sort((a, b) => b.ticket_count - a.ticket_count);
-			setInquiries(options);
-		})();
-		return () => { ignore = true; };
+		setInquiryType('');
+		setInquiries([]);
+		setItems([]);
+		setError(null);
 	}, [from, to, source]);
 
-	const canSearch = useMemo(() => Boolean(from && to && inquiryType), [from, to, inquiryType]);
+	const canSearch = useMemo(() => Boolean(from && to), [from, to]);
 
 	function normalizeType(v: string): string {
 		const s = (v ?? '').trim();
@@ -58,10 +37,32 @@ export default function KeywordsClient() {
 		return s;
 	}
 
+	async function fetchInquiryOptions() {
+		const qs = new URLSearchParams({ from, to, fieldTitle: '문의유형(고객)', status: 'closed', source });
+		const res = await fetch(`/api/stats/inquiries?${qs.toString()}`, { cache: 'no-store' });
+		if (!res.ok) throw new Error(`HTTP ${res.status}`);
+		const json = await res.json();
+		const seen = new Set<string>();
+		const options = ((json.items ?? []) as InquiryOption[])
+			.map((o) => ({ inquiry_type: normalizeType(o.inquiry_type), ticket_count: o.ticket_count }))
+			.filter((o) => {
+				if (!o.inquiry_type) return false;
+				if (seen.has(o.inquiry_type)) return false;
+				seen.add(o.inquiry_type);
+				return true;
+			})
+			.sort((a, b) => b.ticket_count - a.ticket_count);
+		setInquiries(options);
+	}
+
 	async function onSearch() {
 		try {
 			setLoading(true);
 			setError(null);
+			if (!inquiryType) {
+				await fetchInquiryOptions();
+				return; // 1단계: 문의유형 불러오기만 수행
+			}
 			const qs = new URLSearchParams({ from, to, inquiryType: normalizeType(inquiryType), limit: '10', source });
 			const res = await fetch(`/api/keywords/top?${qs.toString()}`, { cache: 'no-store' });
 			if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -86,15 +87,15 @@ export default function KeywordsClient() {
 					<input type="date" className="input" value={to} onChange={(e) => setTo(e.target.value)} />
 				</label>
 				<label className="flex flex-col">
-					<span className="text-gray-600">Source</span>
+					<span className="text-gray-600">채널</span>
 					<select className="select" value={source} onChange={(e) => setSource(e.target.value as any)}>
-						<option value="zendesk">zendesk</option>
-						<option value="channel">channel</option>
+						<option value="zendesk">젠데스크</option>
+						<option value="channel">채널톡</option>
 					</select>
 				</label>
 				<label className="flex flex-col min-w-64">
 					<span className="text-gray-600">문의 유형</span>
-					<select className="select" value={inquiryType} onChange={(e) => setInquiryType(e.target.value)}>
+					<select className="select" value={inquiryType} onChange={(e) => setInquiryType(e.target.value)} disabled={inquiries.length === 0}>
 						<option value="">(선택)</option>
 						{inquiries.map((opt, i) => (
 							<option key={`${opt.inquiry_type}-${i}`} value={opt.inquiry_type}>{opt.inquiry_type}</option>
@@ -116,7 +117,7 @@ export default function KeywordsClient() {
 							</tr>
 						))}
 						{items.length === 0 && (
-							<tr><td colSpan={3} className="p-6 text-center text-gray-500">{loading ? '로딩 중...' : (error || '검색 조건을 선택한 뒤 검색을 눌러주세요.')}</td></tr>
+						<tr><td colSpan={3} className="p-6 text-center text-gray-500">{loading ? '로딩 중...' : (error || (inquiries.length === 0 ? '날짜와 채널을 선택한 뒤 검색을 눌러 문의유형을 불러오세요.' : '문의유형을 선택한 뒤 다시 검색을 눌러 키워드를 조회하세요.'))}</td></tr>
 						)}
 					</tbody>
 				</table>
