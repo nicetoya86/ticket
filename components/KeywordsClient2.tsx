@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 type TopKeyword = { keyword: string; freq?: number; tfidf?: number };
+type TopPhrase = { phrase: string; freq: number };
 
 type InquiryOption = { inquiry_type: string; ticket_count: number };
 
@@ -13,14 +14,17 @@ export default function KeywordsClient() {
 	const [inquiries, setInquiries] = useState<InquiryOption[]>([]);
 	const [inquiryType, setInquiryType] = useState<string>('');
 	const [items, setItems] = useState<TopKeyword[]>([]);
+	const [phrases, setPhrases] = useState<TopPhrase[]>([]);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const [activeTab, setActiveTab] = useState<'keywords' | 'phrases'>('keywords');
 
 	// 날짜/채널 변경 시 상태 초기화(문의유형은 검색 버튼으로 불러오도록 변경)
 	useEffect(() => {
 		setInquiryType('');
 		setInquiries([]);
 		setItems([]);
+		setPhrases([]);
 		setError(null);
 	}, [from, to, source]);
 
@@ -65,11 +69,19 @@ export default function KeywordsClient() {
 				await fetchInquiryOptions();
 				return; // 1단계: 문의유형 불러오기만 수행
 			}
-			const qs = new URLSearchParams({ from, to, inquiryType: normalizeType(inquiryType), limit: '10', source });
-			const res = await fetch(`/api/keywords/top?${qs.toString()}`, { cache: 'no-store' });
-			if (!res.ok) throw new Error(`HTTP ${res.status}`);
-			const json = await res.json();
-			setItems(json ?? []);
+			if (activeTab === 'keywords') {
+				const qs = new URLSearchParams({ from, to, inquiryType: normalizeType(inquiryType), limit: '10', source });
+				const res = await fetch(`/api/keywords/top?${qs.toString()}`, { cache: 'no-store' });
+				if (!res.ok) throw new Error(`HTTP ${res.status}`);
+				const json = await res.json();
+				setItems(json ?? []);
+			} else {
+				const qs = new URLSearchParams({ from, to, inquiryType: normalizeType(inquiryType), limit: '15', source });
+				const res = await fetch(`/api/keywords/phrases?${qs.toString()}`, { cache: 'no-store' });
+				if (!res.ok) throw new Error(`HTTP ${res.status}`);
+				const json = await res.json();
+				setPhrases(json ?? []);
+			}
 		} catch (e: any) {
 			setError(e.message ?? 'failed');
 		} finally {
@@ -79,6 +91,10 @@ export default function KeywordsClient() {
 
 	return (
 		<div className="space-y-4">
+			<div className="flex gap-2">
+				<button className={`px-3 py-1 rounded border ${activeTab==='keywords' ? 'bg-white text-brand-600 border-brand-300' : 'bg-gray-50 text-gray-600 border-gray-200'}`} onClick={() => setActiveTab('keywords')}>키워드</button>
+				<button className={`px-3 py-1 rounded border ${activeTab==='phrases' ? 'bg-white text-brand-600 border-brand-300' : 'bg-gray-50 text-gray-600 border-gray-200'}`} onClick={() => setActiveTab('phrases')}>문의 내용</button>
+			</div>
 			<div className="card p-3 flex flex-wrap items-end gap-3 text-sm">
 				<label className="flex flex-col">
 					<span className="text-gray-600">시작일</span>
@@ -104,9 +120,10 @@ export default function KeywordsClient() {
 						))}
 					</select>
 				</label>
-				<button disabled={!canSearch || loading} onClick={onSearch} className="btn-outline disabled:opacity-50">검색</button>
+				<button disabled={!canSearch || loading} onClick={onSearch} className="btn-outline disabled:opacity-50">{activeTab==='keywords' ? '검색' : '분석하기'}</button>
 			</div>
 
+			{activeTab==='keywords' && (
 			<div className="card overflow-hidden">
 				<table className="table-card">
 					<thead className="thead"><tr><th className="p-2 text-left w-12">#</th><th className="p-2 text-left">키워드</th><th className="p-2 text-right">빈도</th></tr></thead>
@@ -124,6 +141,27 @@ export default function KeywordsClient() {
 					</tbody>
 				</table>
 			</div>
+			)}
+
+			{activeTab==='phrases' && (
+			<div className="card overflow-hidden">
+				<table className="table-card">
+					<thead className="thead"><tr><th className="p-2 text-left w-12">#</th><th className="p-2 text-left">고객들이 자주 물어보는 내용</th><th className="p-2 text-right">빈도</th></tr></thead>
+					<tbody>
+						{phrases.map((r, idx) => (
+							<tr key={idx} className="border-t hover:bg-gray-50/60">
+								<td className="p-2">{idx + 1}</td>
+								<td className="p-2 whitespace-pre-wrap break-words">{r.phrase}</td>
+								<td className="p-2 text-right">{r.freq}</td>
+							</tr>
+						))}
+						{phrases.length === 0 && (
+							<tr><td colSpan={3} className="p-6 text-center text-gray-500">{loading ? '로딩 중...' : (error || (inquiries.length === 0 ? '날짜와 채널을 선택한 뒤 검색을 눌러 문의유형을 불러오세요.' : '문의유형을 선택하고 분석하기를 눌러 주세요.'))}</td></tr>
+						)}
+					</tbody>
+				</table>
+			</div>
+			)}
 		</div>
 	);
 }
