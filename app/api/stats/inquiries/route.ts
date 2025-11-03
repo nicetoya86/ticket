@@ -102,7 +102,20 @@ export async function GET(req: Request) {
         return out;
     };
 
-    if (group || detail === 'texts') {
+    // texts: always return raw body-derived texts; ignore group to honor "body only" requirement
+    if (detail === 'texts') {
+        const { data, error } = await supabaseAdmin.rpc('inquiries_texts_by_type', { p_from: from, p_to: to, p_field_title: fieldTitle, p_status: status });
+        if (error) return NextResponse.json({ items: [], note: 'texts_error', message: error.message }, { status: 200, headers: { 'Cache-Control': 'no-store' } });
+        let items = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
+        // compute exclusion set by ticket_id if any row indicates phone call classification, and drop empty rows
+        const cleaned = items.map((r: any) => ({ ...r, text_value: cleanText(String(r.text_value ?? '')) }));
+        const excludeTickets = new Set<number>();
+        for (const r of cleaned) {
+            if (isPhoneCall(String(r.text_value ?? ''))) excludeTickets.add(Number(r.ticket_id));
+        }
+        items = cleaned.filter((r: any) => !excludeTickets.has(Number(r.ticket_id)) && String(r.text_value ?? '').trim().length > 0);
+        return NextResponse.json({ items }, { headers: { 'Cache-Control': 'no-store' } });
+    } else if (group) {
         const { data, error } = await supabaseAdmin.rpc('inquiries_texts_grouped_by_ticket', { p_from: from, p_to: to, p_field_title: fieldTitle, p_status: status });
         if (error) return NextResponse.json({ items: [], note: 'grouped_texts_error', message: error.message }, { status: 200, headers: { 'Cache-Control': 'no-store' } });
         let items = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
@@ -115,18 +128,6 @@ export async function GET(req: Request) {
         const { data, error } = await supabaseAdmin.rpc('inquiries_users_by_type', { p_from: from, p_to: to, p_field_title: fieldTitle, p_status: status });
         if (error) return NextResponse.json({ items: [], note: 'users_error', message: error.message }, { status: 200, headers: { 'Cache-Control': 'no-store' } });
         const items = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
-        return NextResponse.json({ items }, { headers: { 'Cache-Control': 'no-store' } });
-    } else if (detail === 'texts') {
-        const { data, error } = await supabaseAdmin.rpc('inquiries_texts_by_type', { p_from: from, p_to: to, p_field_title: fieldTitle, p_status: status });
-        if (error) return NextResponse.json({ items: [], note: 'texts_error', message: error.message }, { status: 200, headers: { 'Cache-Control': 'no-store' } });
-        let items = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
-        // compute exclusion set by ticket_id if any row indicates phone call classification, and drop empty rows
-        const cleaned = items.map((r: any) => ({ ...r, text_value: cleanText(String(r.text_value ?? '')) }));
-        const excludeTickets = new Set<number>();
-        for (const r of cleaned) {
-            if (isPhoneCall(String(r.text_value ?? ''))) excludeTickets.add(Number(r.ticket_id));
-        }
-        items = cleaned.filter((r: any) => !excludeTickets.has(Number(r.ticket_id)) && String(r.text_value ?? '').trim().length > 0);
         return NextResponse.json({ items }, { headers: { 'Cache-Control': 'no-store' } });
     }
 
