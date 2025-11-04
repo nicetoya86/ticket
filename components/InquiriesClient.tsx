@@ -17,6 +17,15 @@ export default function InquiriesClient() {
     const [items, setItems] = useState<InquiryText[]>([]);
     const [showResults, setShowResults] = useState<boolean>(false);
 
+    // 검색 조건 변경 시 상태 초기화 (검색 전에는 드롭다운/결과 비활성화 유지)
+    useEffect(() => {
+        setOptions([]);
+        setInquiryType('');
+        setItems([]);
+        setShowResults(false);
+        setError(null);
+    }, [from, to, status, source]);
+
     function normalizeType(v: string): string {
         const s = (v ?? '').trim();
         try {
@@ -51,7 +60,30 @@ export default function InquiriesClient() {
                 if (!map.has(t)) map.set(t, new Set());
                 if (tid) map.get(t)!.add(tid);
             }
-            const opts = Array.from(map.entries()).map(([inquiry_type, ids]) => ({ inquiry_type, ticket_count: ids.size })).sort((a, b) => b.ticket_count - a.ticket_count);
+            let opts = Array.from(map.entries())
+                .map(([inquiry_type, ids]) => ({ inquiry_type, ticket_count: ids.size }))
+                .sort((a, b) => b.ticket_count - a.ticket_count);
+
+            // texts가 비어 있으면 counts로 폴백해서 드롭다운 비활성화 방지
+            if (opts.length === 0) {
+                const qs2 = new URLSearchParams({ fieldTitle: '문의유형(고객)' });
+                if (from) qs2.set('from', from);
+                if (to) qs2.set('to', to);
+                if (status) qs2.set('status', status);
+                if (source) qs2.set('source', source);
+                const res2 = await fetch(`/api/stats/inquiries?${qs2.toString()}`, { cache: 'no-store' });
+                if (res2.ok) {
+                    const json2 = await res2.json();
+                    const seen = new Set<string>();
+                    const dedup = (json2.items ?? [])
+                        .map((r: any) => ({ inquiry_type: normalizeType(String(r?.inquiry_type ?? '')), ticket_count: Number(r?.ticket_count ?? 0) }))
+                        .filter((r: any) => r.inquiry_type)
+                        .sort((a: any, b: any) => b.ticket_count - a.ticket_count)
+                        .filter((r: any) => (seen.has(r.inquiry_type) ? false : (seen.add(r.inquiry_type), true)));
+                    opts = dedup;
+                }
+            }
+
             setOptions(opts);
             if (opts.length > 0) setInquiryType('');
         } catch (e: any) {
