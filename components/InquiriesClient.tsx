@@ -15,6 +15,7 @@ export default function InquiriesClient() {
     const [inquiryType, setInquiryType] = useState<string>('');
     const [options, setOptions] = useState<InquiryOption[]>([]);
     const [items, setItems] = useState<InquiryText[]>([]);
+    const [showResults, setShowResults] = useState<boolean>(false);
 
     function normalizeType(v: string): string {
         const s = (v ?? '').trim();
@@ -33,6 +34,7 @@ export default function InquiriesClient() {
             setLoading(true);
             setError(null);
             setItems([]);
+            setShowResults(false);
             const qs = new URLSearchParams({ fieldTitle: '문의유형(고객)', detail: 'texts' });
             if (from) qs.set('from', from);
             if (to) qs.set('to', to);
@@ -62,6 +64,7 @@ export default function InquiriesClient() {
     // 2단계: 문의유형 선택 후 내용 확인 → body 기반 텍스트 조회
     async function loadTexts() {
         try {
+            setShowResults(true);
             setLoading(true);
             setError(null);
             const qs = new URLSearchParams({ fieldTitle: '문의유형(고객)', detail: 'texts', inquiryType: normalizeType(inquiryType) });
@@ -127,23 +130,25 @@ export default function InquiriesClient() {
                 <button disabled={!canAnalyze || loading} className="btn-outline disabled:opacity-50" onClick={loadTexts}>내용 확인</button>
             </div>
 
-            <div className="card overflow-hidden">
-                <table className="table-card">
-                    <thead className="thead"><tr><th className="p-2">문의유형</th><th className="p-2">티켓ID</th><th className="p-2">내용</th></tr></thead>
-                    <tbody>
-                        {items.map((r, idx) => (
-                            <tr key={idx} className="border-t align-top hover:bg-gray-50/60">
-                                <td className="p-2">{normalizeType(String(r.inquiry_type ?? ''))}</td>
-                                <td className="p-2">{r.ticket_id}</td>
-                                <td className="p-2 whitespace-pre-wrap break-words max-w-[64rem]">{r.text_value}</td>
-                            </tr>
-                        ))}
-                        {items.length === 0 && (
-                            <tr><td colSpan={3} className="p-6 text-center text-gray-500">{loading ? '로딩 중...' : (error || (options.length === 0 ? '날짜와 상태를 선택한 뒤 검색을 눌러 문의유형을 불러오세요.' : '문의유형을 선택한 뒤 내용 확인을 눌러 주세요.'))}</td></tr>
-                        )}
-                    </tbody>
-                </table>
-            </div>
+            {showResults && (
+                <div className="card overflow-hidden">
+                    <table className="table-card">
+                        <thead className="thead"><tr><th className="p-2">문의유형</th><th className="p-2">티켓ID</th><th className="p-2">내용</th></tr></thead>
+                        <tbody>
+                            {items.map((r, idx) => (
+                                <tr key={idx} className="border-t align-top hover:bg-gray-50/60">
+                                    <td className="p-2">{normalizeType(String(r.inquiry_type ?? ''))}</td>
+                                    <td className="p-2">{r.ticket_id}</td>
+                                    <td className="p-2 whitespace-pre-wrap break-words max-w-[64rem]">{r.text_value}</td>
+                                </tr>
+                            ))}
+                            {items.length === 0 && (
+                                <tr><td colSpan={3} className="p-6 text-center text-gray-500">{loading ? '로딩 중...' : (error || '검색 결과가 없습니다.')}</td></tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            )}
         </div>
     );
 }
