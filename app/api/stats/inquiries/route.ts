@@ -17,6 +17,7 @@ export async function GET(req: Request) {
     const source = searchParams.get('source') ?? '';
     const group = searchParams.get('group') === '1' || searchParams.get('group') === 'true';
     const detail = searchParams.get('detail') ?? '';
+	const debug = searchParams.get('debug') === '1';
 
     // helpers for cleaning texts mode
     const stripBackref = (s: string): string => s.replace(/(^|\n)\s*\\\d+:?\s*/g, '$1');
@@ -125,20 +126,33 @@ export async function GET(req: Request) {
     };
 
     // texts: always return raw body-derived texts; ignore group to honor "body only" requirement
-    if (detail === 'texts') {
-        const { data, error } = await supabaseAdmin.rpc('inquiries_texts_by_type', { p_from: from, p_to: to, p_field_title: fieldTitle, p_status: status });
-        if (error) return NextResponse.json({ items: [], note: 'texts_error', message: error.message }, { status: 200, headers: { 'Cache-Control': 'no-store' } });
-        let items = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
-        // compute exclusion set by ticket_id if any row indicates phone call classification, and drop empty rows
-        const cleaned = items.map((r: any) => ({ ...r, text_value: cleanTextBodyOnly(String(r.text_value ?? '')) }));
-        const excludeTickets = new Set<number>();
-        for (const r of cleaned) {
-            if (isPhoneCall(String(r.text_value ?? ''))) excludeTickets.add(Number(r.ticket_id));
-        }
-        items = cleaned
-            .filter((r: any) => !excludeTickets.has(Number(r.ticket_id)) && String(r.text_value ?? '').trim().length > 0)
-            .filter((r: any) => (inquiryTypeParam ? normalizeType(String(r.inquiry_type ?? '')) === normalizeType(inquiryTypeParam) : true));
-        return NextResponse.json({ items }, { headers: { 'Cache-Control': 'no-store' } });
+	if (detail === 'texts') {
+		const { data, error } = await supabaseAdmin.rpc('inquiries_texts_by_type', { p_from: from, p_to: to, p_field_title: fieldTitle, p_status: status });
+		if (error) return NextResponse.json({ items: [], note: 'texts_error', message: error.message }, { status: 200, headers: { 'Cache-Control': 'no-store' } });
+		const all = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
+		const tnorm = normalizeType(inquiryTypeParam);
+		const forType = tnorm ? all.filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === tnorm) : all;
+		const preCount = forType.length;
+		const cleaned = forType.map((r: any) => ({ ...r, text_value: cleanTextBodyOnly(String(r.text_value ?? '')) }));
+		const emptyBodies = cleaned.filter((r: any) => String(r.text_value ?? '').trim().length === 0).length;
+		const excludeTickets = new Set<number>();
+		for (const r of cleaned) {
+			if (isPhoneCall(String(r.text_value ?? ''))) excludeTickets.add(Number(r.ticket_id));
+		}
+		const items = cleaned
+			.filter((r: any) => !excludeTickets.has(Number(r.ticket_id)) && String(r.text_value ?? '').trim().length > 0);
+		const payload: any = { items };
+		if (debug) {
+			payload.debug = {
+				preCount,
+				afterCleanNonEmpty: items.length,
+				emptyBodies,
+				phoneExcludedTicketCount: excludeTickets.size,
+				phoneExcludedTicketIds: Array.from(excludeTickets.values()),
+				distinctTypes: Array.from(new Set(all.map((r: any) => normalizeType(String(r.inquiry_type ?? ''))))).slice(0, 50),
+			};
+		}
+		return NextResponse.json(payload, { headers: { 'Cache-Control': 'no-store' } });
     } else if (group) {
         const { data, error } = await supabaseAdmin.rpc('inquiries_texts_grouped_by_ticket', { p_from: from, p_to: to, p_field_title: fieldTitle, p_status: status });
         if (error) return NextResponse.json({ items: [], note: 'grouped_texts_error', message: error.message }, { status: 200, headers: { 'Cache-Control': 'no-store' } });
