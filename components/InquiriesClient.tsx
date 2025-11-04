@@ -107,8 +107,8 @@ export default function InquiriesClient() {
             const res = await fetch(`/api/stats/inquiries?${qs.toString()}`, { cache: 'no-store' });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const json = await res.json();
-            const t = normalizeType(inquiryType);
-            const rows: InquiryText[] = (json.items ?? []).filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === t);
+            // 서버에서 inquiryTypeParam으로 이미 필터링되므로 추가 필터 없이 그대로 사용
+            const rows: InquiryText[] = (json.items ?? []);
             setItems(rows);
         } catch (e: any) {
             setError(e.message ?? 'failed');
