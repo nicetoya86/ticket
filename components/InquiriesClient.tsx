@@ -93,13 +93,14 @@ export default function InquiriesClient() {
         }
     }
 
-    // 2단계: 문의유형 선택 후 내용 확인 → body 기반 텍스트 조회
+    // 2단계: 문의유형 선택 후 내용 확인 → 타임라인(그룹) 기반 텍스트 조회
     async function loadTexts() {
         try {
             setShowResults(true);
             setLoading(true);
             setError(null);
-            const qs = new URLSearchParams({ fieldTitle: '문의유형(고객)', detail: 'texts', inquiryType: normalizeType(inquiryType) });
+            // 타임라인 형태로 보기 위해 group=1 사용, 서버에서 inquiryType 필터 적용
+            const qs = new URLSearchParams({ fieldTitle: '문의유형(고객)', group: '1', inquiryType: normalizeType(inquiryType) });
             if (from) qs.set('from', from);
             if (to) qs.set('to', to);
             if (status) qs.set('status', status);
@@ -107,7 +108,7 @@ export default function InquiriesClient() {
             const res = await fetch(`/api/stats/inquiries?${qs.toString()}`, { cache: 'no-store' });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const json = await res.json();
-            // 서버에서 inquiryTypeParam으로 이미 필터링되므로 추가 필터 없이 그대로 사용
+            // 서버에서 inquiryTypeParam으로 필터링됨
             const rows: InquiryText[] = (json.items ?? []);
             setItems(rows);
         } catch (e: any) {

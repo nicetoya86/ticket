@@ -163,7 +163,12 @@ export async function GET(req: Request) {
         const { data, error } = await supabaseAdmin.rpc('inquiries_texts_grouped_by_ticket', { p_from: from, p_to: to, p_field_title: fieldTitle, p_status: status });
         if (error) return NextResponse.json({ items: [], note: 'grouped_texts_error', message: error.message }, { status: 200, headers: { 'Cache-Control': 'no-store' } });
         let items = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
-        // texts-specific filters
+        // optional per-ticket filter for debugging
+        if (filterByTicket) items = items.filter((r: any) => Number(r?.ticket_id) === ticketId);
+        // inquiry type filter
+        const tnorm = normalizeType(inquiryTypeParam);
+        if (tnorm) items = items.filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === tnorm);
+        // cleaning and phone-call exclusion
         items = items
             .map((r: any) => ({ ...r, text_value: cleanText(String(r.text_value ?? '')) }))
             .filter((r: any) => !isPhoneCall(String(r.text_value ?? '')) && String(r.text_value ?? '').trim().length > 0);
