@@ -18,6 +18,9 @@ export async function GET(req: Request) {
     const group = searchParams.get('group') === '1' || searchParams.get('group') === 'true';
     const detail = searchParams.get('detail') ?? '';
 	const debug = searchParams.get('debug') === '1';
+	const ticketIdParam = searchParams.get('ticketId');
+	const ticketId = ticketIdParam ? Number(ticketIdParam) : NaN;
+	const filterByTicket = Number.isFinite(ticketId) && ticketId > 0;
 
     // helpers for cleaning texts mode
     const stripBackref = (s: string): string => s.replace(/(^|\n)\s*\\\d+:?\s*/g, '$1');
@@ -129,7 +132,10 @@ export async function GET(req: Request) {
 	if (detail === 'texts') {
 		const { data, error } = await supabaseAdmin.rpc('inquiries_texts_by_type', { p_from: from, p_to: to, p_field_title: fieldTitle, p_status: status });
 		if (error) return NextResponse.json({ items: [], note: 'texts_error', message: error.message }, { status: 200, headers: { 'Cache-Control': 'no-store' } });
-		const all = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
+		let all = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
+		if (filterByTicket) {
+			all = all.filter((r: any) => Number(r?.ticket_id) === ticketId);
+		}
 		const tnorm = normalizeType(inquiryTypeParam);
 		const forType = tnorm ? all.filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === tnorm) : all;
 		const preCount = forType.length;
