@@ -88,7 +88,11 @@ export async function GET(req: Request) {
             .replace(/[\p{P}\p{S}]+/gu, ' ')
             .toLowerCase();
         const tokens = cleaned.split(/\s+/).filter(Boolean);
-        const stop = new Set<string>(['및','그리고','에서','으로','으로는','에','은','는','이','가','을','를','도','만','과','와','요','게','좀','좀요','이나','나','으로의','으로도']);
+        const stop = new Set<string>([
+            '및','그리고','에서','으로','으로는','에','은','는','이','가','을','를','도','만','과','와','요','게','좀','좀요','이나','나','으로의','으로도',
+            // iOS/Android user 제외
+            'ios','android','user','iosuser','androiduser'
+        ]);
         const freq = new Map<string, number>();
         for (const tok of tokens) {
             if (tok.length < 2) continue;
