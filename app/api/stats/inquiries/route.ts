@@ -176,6 +176,45 @@ export async function GET(req: Request) {
 		}
 		const items = cleaned
 			.filter((r: any) => !excludeTickets.has(Number(r.ticket_id)) && String(r.text_value ?? '').trim().length > 0);
+
+		// Final fallback: if still empty, derive from raw Zendesk tickets (description) by matching custom field value
+		if ((items ?? []).length === 0 && (source === 'zendesk' || source === '')) {
+			try {
+				const f = await supabaseAdmin.from('zd_ticket_fields').select('id,title').in('title', fieldTitleCandidates).limit(1).maybeSingle();
+				const fieldId = f?.data?.id as number | undefined;
+				if (fieldId) {
+					const tks = await supabaseAdmin
+						.from('raw_zendesk_tickets')
+						.select('id, created_at, description, custom_fields')
+						.gte('created_at', from)
+						.lte('created_at', to)
+						.limit(10000);
+					if (!tks.error) {
+						const normTarget = tnorm;
+						const matched = (tks.data ?? []).filter((t: any) => {
+							const cfs: Array<{ id: number; value: any }> = Array.isArray(t?.custom_fields) ? t.custom_fields : [];
+							const cf = cfs.find((c) => Number(c?.id) === Number(fieldId));
+							const v = cf?.value;
+							const values: string[] = Array.isArray(v) ? v.map((x) => String(x ?? '').trim()) : [String(v ?? '').trim()];
+							return values.some((vv) => normalizeType(vv) === normTarget);
+						});
+						const derived = matched
+							.map((t: any) => ({
+								inquiry_type: normTarget,
+								ticket_id: Number(t.id),
+								created_at: String(t.created_at),
+								text_type: 'body',
+								text_value: cleanTextBodyOnly(String(t.description ?? ''))
+							}))
+							.filter((r: any) => String(r.text_value ?? '').trim().length > 0 && !isPhoneCall(String(r.text_value ?? '')));
+						if (derived.length > 0) {
+							return NextResponse.json({ items: derived }, { headers: { 'Cache-Control': 'no-store' } });
+						}
+					}
+				}
+			} catch {}
+		}
+
 		const payload: any = { items };
 		if (debug) {
 			payload.debug = {
@@ -218,6 +257,45 @@ export async function GET(req: Request) {
         items = items
             .map((r: any) => ({ ...r, text_value: cleanText(String(r.text_value ?? '')) }))
             .filter((r: any) => !isPhoneCall(String(r.text_value ?? '')) && String(r.text_value ?? '').trim().length > 0);
+
+		// Final fallback: use raw Zendesk tickets descriptions if grouped texts are empty
+		if ((items ?? []).length === 0 && (source === 'zendesk' || source === '')) {
+			try {
+				const f = await supabaseAdmin.from('zd_ticket_fields').select('id,title').in('title', fieldTitleCandidates).limit(1).maybeSingle();
+				const fieldId = f?.data?.id as number | undefined;
+				if (fieldId) {
+					const tks = await supabaseAdmin
+						.from('raw_zendesk_tickets')
+						.select('id, created_at, description, custom_fields')
+						.gte('created_at', from)
+						.lte('created_at', to)
+						.limit(10000);
+					if (!tks.error) {
+						const normTarget = tnorm;
+						const matched = (tks.data ?? []).filter((t: any) => {
+							const cfs: Array<{ id: number; value: any }> = Array.isArray(t?.custom_fields) ? t.custom_fields : [];
+							const cf = cfs.find((c) => Number(c?.id) === Number(fieldId));
+							const v = cf?.value;
+							const values: string[] = Array.isArray(v) ? v.map((x) => String(x ?? '').trim()) : [String(v ?? '').trim()];
+							return values.some((vv) => normalizeType(vv) === normTarget);
+						});
+						const derived = matched
+							.map((t: any) => ({
+								inquiry_type: normTarget,
+								ticket_id: Number(t.id),
+								created_at: String(t.created_at),
+								text_type: 'body',
+								text_value: cleanText(String(t.description ?? ''))
+							}))
+							.filter((r: any) => String(r.text_value ?? '').trim().length > 0 && !isPhoneCall(String(r.text_value ?? '')));
+						if (derived.length > 0) {
+							return NextResponse.json({ items: derived }, { headers: { 'Cache-Control': 'no-store' } });
+						}
+					}
+				}
+			} catch {}
+		}
+
         return NextResponse.json({ items }, { headers: { 'Cache-Control': 'no-store' } });
     } else if (detail === '1' || detail === 'users') {
         const { data, error } = await supabaseAdmin.rpc('inquiries_users_by_type', { p_from: from, p_to: to, p_field_title: fieldTitle, p_status: status });
