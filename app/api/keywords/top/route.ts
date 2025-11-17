@@ -39,7 +39,10 @@ export async function GET(req: Request) {
             p_field_title: '문의유형(고객)',
             p_status: ''
         });
-        if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+        if (error) {
+            console.error('[keywords/top] RPC inquiries_texts_grouped_by_ticket error:', error.message);
+            return NextResponse.json([], { status: 200, headers: { 'Cache-Control': 'no-store' } });
+        }
         let rows = (data ?? []).filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === targetType);
         // Fallback: if no grouped rows, try non-grouped texts
         if (rows.length === 0) {
@@ -163,7 +166,10 @@ ${textForLLM}` }
     if (categoryIds.length > 0) query = query.in('category_id', categoryIds);
 
     const { data, error } = await query.limit(1000);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) {
+        console.error('[keywords/top] keywords_daily query error:', error.message);
+        return NextResponse.json([], { status: 200, headers: { 'Cache-Control': 'no-store' } });
+    }
 
     const scoreKey = metric === 'freq' ? 'freq' : 'tfidf';
     const agg = new Map<string, { keyword: string; freq: number; tfidf: number }>();
@@ -174,5 +180,5 @@ ${textForLLM}` }
         agg.set(row.keyword, cur);
     }
     const sorted = [...agg.values()].sort((a, b) => (b as any)[scoreKey] - (a as any)[scoreKey]).slice(0, limit);
-    return NextResponse.json(sorted);
+    return NextResponse.json(sorted, { headers: { 'Cache-Control': 'no-store' } });
 }
