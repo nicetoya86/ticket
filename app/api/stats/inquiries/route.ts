@@ -177,11 +177,20 @@ export async function GET(req: Request) {
 		const items = cleaned
 			.filter((r: any) => !excludeTickets.has(Number(r.ticket_id)) && String(r.text_value ?? '').trim().length > 0);
 
-		// Final fallback: if still empty, derive from raw Zendesk tickets (description) by matching custom field value
+		// Final fallback: if still empty, pull from Zendesk (tickets/comments) when DB rows are missing
 		if ((items ?? []).length === 0 && (source === 'zendesk' || source === '')) {
 			try {
 				const f = await supabaseAdmin.from('zd_ticket_fields').select('id,title').in('title', fieldTitleCandidates).limit(1).maybeSingle();
-				const fieldId = f?.data?.id as number | undefined;
+				let fieldId = f?.data?.id as number | undefined;
+				// If field meta missing in DB, fetch from Zendesk live
+				if (!fieldId) {
+					try {
+						const { fetchTicketFields } = await import('@/lib/vendors/zendesk_ext');
+						const fields = await fetchTicketFields();
+						const ff = fields.find((z: any) => fieldTitleCandidates.includes(String(z?.title ?? '').trim()));
+						if (ff?.id) fieldId = Number(ff.id);
+					} catch {}
+				}
 				if (fieldId) {
 					const tks = await supabaseAdmin
 						.from('raw_zendesk_tickets')
@@ -189,57 +198,88 @@ export async function GET(req: Request) {
 						.gte('created_at', from)
 						.lte('created_at', to)
 						.limit(10000);
-					if (!tks.error) {
-						const normTarget = tnorm;
-						const matched = (tks.data ?? []).filter((t: any) => {
+					let matched: any[] = [];
+					const normTarget = tnorm;
+					if (!tks.error && (tks.data ?? []).length > 0) {
+						matched = (tks.data ?? []).filter((t: any) => {
 							const cfs: Array<{ id: number; value: any }> = Array.isArray(t?.custom_fields) ? t.custom_fields : [];
 							const cf = cfs.find((c) => Number(c?.id) === Number(fieldId));
 							const v = cf?.value;
 							const values: string[] = Array.isArray(v) ? v.map((x) => String(x ?? '').trim()) : [String(v ?? '').trim()];
 							return values.some((vv) => normalizeType(vv) === normTarget);
 						});
-						// 1) description 기반 단문 항목
-						const derivedDesc = matched
-							.map((t: any) => ({
-								inquiry_type: normTarget,
-								ticket_id: Number(t.id),
-								created_at: String(t.created_at),
-								text_type: 'body',
-								text_value: cleanTextBodyOnly(String(t.description ?? ''))
-							}))
-							.filter((r: any) => String(r.text_value ?? '').trim().length > 0 && !isPhoneCall(String(r.text_value ?? '')));
+					} else {
+						try {
+							const { fetchIncrementalTickets } = await import('@/lib/vendors/zendesk_ext');
+							const zTickets = await fetchIncrementalTickets(from, to);
+							matched = zTickets.filter((t: any) => {
+								const cfs: Array<{ id: number; value: any }> = Array.isArray(t?.custom_fields) ? t.custom_fields : [];
+								const cf = cfs.find((c) => Number(c?.id) === Number(fieldId));
+								const v = cf?.value;
+								const values: string[] = Array.isArray(v) ? v.map((x) => String(x ?? '').trim()) : [String(v ?? '').trim()];
+								return values.some((vv) => normalizeType(vv) === normTarget);
+							});
+						} catch {}
+					}
 
-						// 2) comments 기반 항목(각 코멘트를 개별 아이템으로 반환)
-						let derivedComments: any[] = [];
-						const ticketIds = matched.map((t: any) => Number(t.id)).filter((x: any) => Number.isFinite(x));
-						if (ticketIds.length > 0) {
-							const chunkSize = 200;
-							for (let i = 0; i < ticketIds.length; i += chunkSize) {
-								const chunk = ticketIds.slice(i, i + chunkSize);
-								const comm = await supabaseAdmin
-									.from('raw_zendesk_comments')
-									.select('ticket_id, comment_id, created_at, body')
-									.in('ticket_id', chunk)
-									.order('created_at', { ascending: true });
-								if (!comm.error) {
-                                    const rows = (comm.data ?? [])
-										.map((c: any) => ({
-											inquiry_type: normTarget,
-											ticket_id: Number(c.ticket_id),
+					// 1) description-as-text items
+					const derivedDesc = (matched ?? [])
+						.map((t: any) => ({
+							inquiry_type: normTarget,
+							ticket_id: Number(t.id),
+							created_at: String(t.created_at),
+							text_type: 'body',
+							text_value: cleanTextBodyOnly(String(t.description ?? ''))
+						}))
+						.filter((r: any) => String(r.text_value ?? '').trim().length > 0 && !isPhoneCall(String(r.text_value ?? '')));
+
+					// 2) comments as separate items
+					let derivedComments: any[] = [];
+					const ticketIds = (matched ?? []).map((t: any) => Number(t.id)).filter((x: any) => Number.isFinite(x));
+					if (ticketIds.length > 0) {
+						const chunkSize = 200;
+						for (let i = 0; i < ticketIds.length; i += chunkSize) {
+							const chunk = ticketIds.slice(i, i + chunkSize);
+							let commentRows: any[] = [];
+							const comm = await supabaseAdmin
+								.from('raw_zendesk_comments')
+								.select('ticket_id, comment_id, created_at, body')
+								.in('ticket_id', chunk)
+								.order('created_at', { ascending: true });
+							if (!comm.error && (comm.data ?? []).length > 0) {
+								commentRows = comm.data ?? [];
+							} else {
+								try {
+									const { fetchTicketComments } = await import('@/lib/vendors/zendesk');
+									for (const tid of chunk) {
+										const zc = await fetchTicketComments(Number(tid), 500);
+										commentRows.push(...(zc ?? []).map((c: any) => ({
+											ticket_id: Number(tid),
+											comment_id: Number(c.id),
 											created_at: String(c.created_at),
-											text_type: 'comment',
-											text_value: cleanTextBodyOnly(String(c.body ?? ''))
-										}))
-										.filter((r: any) => String(r.text_value ?? '').trim().length > 0 && !isPhoneCall(String(r.text_value ?? '')));
-									derivedComments.push(...rows);
-								}
+											body: String(c.body ?? '')
+										})));
+									}
+								} catch {}
+							}
+							if ((commentRows ?? []).length > 0) {
+								const rowsOut = commentRows
+									.map((c: any) => ({
+										inquiry_type: normTarget,
+										ticket_id: Number(c.ticket_id),
+										created_at: String(c.created_at),
+										text_type: 'comment',
+										text_value: cleanTextBodyOnly(String(c.body ?? ''))
+									}))
+									.filter((r: any) => String(r.text_value ?? '').trim().length > 0 && !isPhoneCall(String(r.text_value ?? '')));
+								derivedComments.push(...rowsOut);
 							}
 						}
+					}
 
-						const combined = [...derivedComments, ...derivedDesc];
-						if (combined.length > 0) {
-							return NextResponse.json({ items: combined }, { headers: { 'Cache-Control': 'no-store' } });
-						}
+					const combined = [...derivedComments, ...derivedDesc];
+					if (combined.length > 0) {
+						return NextResponse.json({ items: combined }, { headers: { 'Cache-Control': 'no-store' } });
 					}
 				}
 			} catch {}
