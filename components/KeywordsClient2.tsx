@@ -38,42 +38,15 @@ export default function KeywordsClient() {
 	}
 
 	async function fetchInquiryOptions() {
-		// 텍스트가 실제 존재하는 문의유형 우선, 없으면 counts로 폴백 (closed → all 순서로 단계적 시도)
-		async function loadTextsOptions(statusTry: string): Promise<InquiryOption[]> {
-			const qs = new URLSearchParams({ from, to, fieldTitle: '문의유형(고객)', status: statusTry, detail: 'texts', source });
-			const res = await fetch(`/api/stats/inquiries?${qs.toString()}`, { cache: 'no-store' });
-			if (!res.ok) return [];
-			const json = await res.json();
-			const map = new Map<string, Set<number>>();
-			for (const r of (json.items ?? []) as any[]) {
-				const t = normalizeType(String(r?.inquiry_type ?? ''));
-				if (!t) continue;
-				const tid = Number(r?.ticket_id ?? 0);
-				if (!map.has(t)) map.set(t, new Set());
-				if (tid) map.get(t)!.add(tid);
-			}
-			return Array.from(map.entries())
-				.map(([inquiry_type, ids]) => ({ inquiry_type, ticket_count: ids.size }))
-				.sort((a, b) => b.ticket_count - a.ticket_count);
-		}
-		async function loadCountOptions(statusTry: string): Promise<InquiryOption[]> {
-			const qs2 = new URLSearchParams({ from, to, fieldTitle: '문의유형(고객)', status: statusTry, source });
-			const res2 = await fetch(`/api/stats/inquiries?${qs2.toString()}`, { cache: 'no-store' });
-			if (!res2.ok) return [];
-			const json2 = await res2.json();
-			const seen = new Set<string>();
-			return (json2.items ?? [])
-				.map((r: any) => ({ inquiry_type: normalizeType(String(r?.inquiry_type ?? '')), ticket_count: Number(r?.ticket_count ?? 0) }))
-				.filter((r: any) => r.inquiry_type)
-				.sort((a: any, b: any) => b.ticket_count - a.ticket_count)
-				.filter((r: any) => (seen.has(r.inquiry_type) ? false : (seen.add(r.inquiry_type), true)));
-		}
-
-		let options = await loadTextsOptions('closed');
-		if (options.length === 0) options = await loadTextsOptions(''); // 전체 상태
-		if (options.length === 0) options = await loadCountOptions('closed');
-		if (options.length === 0) options = await loadCountOptions('');
-
+		const qs = new URLSearchParams({ from, to, fieldTitle: '문의유형(고객)', source });
+		const res = await fetch(`/api/stats/inquiries/options?${qs.toString()}`, { cache: 'no-store' });
+		if (!res.ok) { setInquiries([]); return; }
+		const json = await res.json();
+		const seen = new Set<string>();
+		const options: InquiryOption[] = (json.items ?? [])
+			.map((r: any) => ({ inquiry_type: normalizeType(String(r?.inquiry_type ?? '')), ticket_count: Number(r?.ticket_count ?? 0) }))
+			.filter((r: any) => r.inquiry_type && (seen.has(r.inquiry_type) ? false : (seen.add(r.inquiry_type), true)))
+			.sort((a: any, b: any) => b.ticket_count - a.ticket_count);
 		setInquiries(options);
 	}
 
