@@ -198,7 +198,8 @@ export async function GET(req: Request) {
 							const values: string[] = Array.isArray(v) ? v.map((x) => String(x ?? '').trim()) : [String(v ?? '').trim()];
 							return values.some((vv) => normalizeType(vv) === normTarget);
 						});
-						const derived = matched
+						// 1) description 기반 단문 항목
+						const derivedDesc = matched
 							.map((t: any) => ({
 								inquiry_type: normTarget,
 								ticket_id: Number(t.id),
@@ -207,8 +208,37 @@ export async function GET(req: Request) {
 								text_value: cleanTextBodyOnly(String(t.description ?? ''))
 							}))
 							.filter((r: any) => String(r.text_value ?? '').trim().length > 0 && !isPhoneCall(String(r.text_value ?? '')));
-						if (derived.length > 0) {
-							return NextResponse.json({ items: derived }, { headers: { 'Cache-Control': 'no-store' } });
+
+						// 2) comments 기반 항목(각 코멘트를 개별 아이템으로 반환)
+						let derivedComments: any[] = [];
+						const ticketIds = matched.map((t: any) => Number(t.id)).filter((x: any) => Number.isFinite(x));
+						if (ticketIds.length > 0) {
+							const chunkSize = 200;
+							for (let i = 0; i < ticketIds.length; i += chunkSize) {
+								const chunk = ticketIds.slice(i, i + chunkSize);
+								const comm = await supabaseAdmin
+									.from('raw_zendesk_comments')
+									.select('ticket_id, comment_id, created_at, body')
+									.in('ticket_id', chunk)
+									.order('created_at', { ascending: true });
+								if (!comm.error) {
+                                    const rows = (comm.data ?? [])
+										.map((c: any) => ({
+											inquiry_type: normTarget,
+											ticket_id: Number(c.ticket_id),
+											created_at: String(c.created_at),
+											text_type: 'comment',
+											text_value: cleanTextBodyOnly(String(c.body ?? ''))
+										}))
+										.filter((r: any) => String(r.text_value ?? '').trim().length > 0 && !isPhoneCall(String(r.text_value ?? '')));
+									derivedComments.push(...rows);
+								}
+							}
+						}
+
+						const combined = [...derivedComments, ...derivedDesc];
+						if (combined.length > 0) {
+							return NextResponse.json({ items: combined }, { headers: { 'Cache-Control': 'no-store' } });
 						}
 					}
 				}
@@ -279,17 +309,51 @@ export async function GET(req: Request) {
 							const values: string[] = Array.isArray(v) ? v.map((x) => String(x ?? '').trim()) : [String(v ?? '').trim()];
 							return values.some((vv) => normalizeType(vv) === normTarget);
 						});
-						const derived = matched
-							.map((t: any) => ({
-								inquiry_type: normTarget,
-								ticket_id: Number(t.id),
-								created_at: String(t.created_at),
-								text_type: 'body',
-								text_value: cleanText(String(t.description ?? ''))
-							}))
-							.filter((r: any) => String(r.text_value ?? '').trim().length > 0 && !isPhoneCall(String(r.text_value ?? '')));
-						if (derived.length > 0) {
-							return NextResponse.json({ items: derived }, { headers: { 'Cache-Control': 'no-store' } });
+						// 1) 티켓별로 comment들을 시간 순으로 합쳐 한 블록으로 반환(대화 형태에 근접)
+						let derivedBlocks: any[] = [];
+						const ticketIds = matched.map((t: any) => Number(t.id)).filter((x: any) => Number.isFinite(x));
+						if (ticketIds.length > 0) {
+							const chunkSize = 200;
+							for (let i = 0; i < ticketIds.length; i += chunkSize) {
+								const chunk = ticketIds.slice(i, i + chunkSize);
+								const comm = await supabaseAdmin
+									.from('raw_zendesk_comments')
+									.select('ticket_id, created_at, body')
+									.in('ticket_id', chunk)
+									.order('created_at', { ascending: true });
+								if (!comm.error) {
+									const grouped = new Map<number, string[]>();
+									for (const c of (comm.data ?? [])) {
+										const arr = grouped.get(Number(c.ticket_id)) ?? [];
+										const txt = cleanText(String(c.body ?? ''));
+										if (txt.trim().length > 0 && !isPhoneCall(txt)) arr.push(txt);
+										grouped.set(Number(c.ticket_id), arr);
+									}
+									for (const [tid, arr] of grouped.entries()) {
+										if (arr.length === 0) continue;
+										derivedBlocks.push({
+											inquiry_type: normTarget,
+											ticket_id: tid,
+											created_at: String((comm.data ?? []).find((z: any) => Number(z.ticket_id) === tid)?.created_at ?? from),
+											text_type: 'comments_block',
+											text_value: arr.join('\n')
+										});
+									}
+								}
+							}
+						}
+						// 2) description을 보조로 추가
+						const derivedDesc = matched.map((t: any) => ({
+							inquiry_type: normTarget,
+							ticket_id: Number(t.id),
+							created_at: String(t.created_at),
+							text_type: 'body',
+							text_value: cleanText(String(t.description ?? ''))
+						})).filter((r: any) => String(r.text_value ?? '').trim().length > 0 && !isPhoneCall(String(r.text_value ?? '')));
+
+						const combined = [...derivedBlocks, ...derivedDesc];
+						if (combined.length > 0) {
+							return NextResponse.json({ items: combined }, { headers: { 'Cache-Control': 'no-store' } });
 						}
 					}
 				}
