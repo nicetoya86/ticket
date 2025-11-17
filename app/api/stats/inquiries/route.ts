@@ -281,6 +281,80 @@ export async function GET(req: Request) {
 					if (combined.length > 0) {
 						return NextResponse.json({ items: combined }, { headers: { 'Cache-Control': 'no-store' } });
 					}
+
+					// 3) heuristic fallback when custom field linking fails: match by tags/subject/description
+					try {
+						const toSlug = (s: string) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, '-');
+						const tnormSlug = toSlug(normTarget);
+						let zTickets: any[] = [];
+						if (!tks.error && (tks.data ?? []).length > 0) {
+							zTickets = tks.data ?? [];
+						} else {
+							const { fetchIncrementalTickets } = await import('@/lib/vendors/zendesk_ext');
+							zTickets = await fetchIncrementalTickets(from, to);
+						}
+						const heuristic = zTickets.filter((t: any) => {
+							const tags: string[] = Array.isArray(t?.tags) ? t.tags.map((x: any) => String(x ?? '').toLowerCase()) : [];
+							const sub = String(t?.subject ?? '').toLowerCase();
+							const desc = String(t?.description ?? '').toLowerCase();
+							return tags.includes(tnormSlug) || tags.includes(normTarget.toLowerCase()) || sub.includes(normTarget) || desc.includes(normTarget);
+						});
+						let hComments: any[] = [];
+						const hIds = heuristic.map((t: any) => Number(t.id)).filter((x: any) => Number.isFinite(x));
+						if (hIds.length > 0) {
+							const chunkSize2 = 200;
+							for (let i = 0; i < hIds.length; i += chunkSize2) {
+								const chunk2 = hIds.slice(i, i + chunkSize2);
+								const comm2 = await supabaseAdmin
+									.from('raw_zendesk_comments')
+									.select('ticket_id, created_at, body')
+									.in('ticket_id', chunk2)
+									.order('created_at', { ascending: true });
+								let rows2: any[] = [];
+								if (!comm2.error && (comm2.data ?? []).length > 0) {
+									rows2 = comm2.data ?? [];
+								} else {
+									const { fetchTicketComments } = await import('@/lib/vendors/zendesk');
+									for (const tid of chunk2) {
+										const zc2 = await fetchTicketComments(Number(tid), 500);
+										rows2.push(...(zc2 ?? []).map((c: any) => ({
+											ticket_id: Number(tid),
+											created_at: String(c.created_at),
+											body: String(c.body ?? '')
+										})));
+									}
+								}
+								const grouped2 = new Map<number, string[]>();
+								for (const c of rows2) {
+									const arr = grouped2.get(Number(c.ticket_id)) ?? [];
+									const txt = cleanText(String(c.body ?? ''));
+									if (txt.trim().length > 0 && !isPhoneCall(txt)) arr.push(txt);
+									grouped2.set(Number(c.ticket_id), arr);
+								}
+								for (const [tid, arr] of grouped2.entries()) {
+									if (arr.length === 0) continue;
+									hComments.push({
+										inquiry_type: normTarget,
+										ticket_id: tid,
+										created_at: String((rows2.find((z: any) => Number(z.ticket_id) === tid)?.created_at) ?? from),
+										text_type: 'comments_block',
+										text_value: arr.join('\n')
+									});
+								}
+							}
+						}
+						const hDesc = heuristic.map((t: any) => ({
+							inquiry_type: normTarget,
+							ticket_id: Number(t.id),
+							created_at: String(t.created_at),
+							text_type: 'body',
+							text_value: cleanText(String(t.description ?? ''))
+						})).filter((r: any) => String(r.text_value ?? '').trim().length > 0 && !isPhoneCall(String(r.text_value ?? '')));
+						const hCombined = [...hComments, ...hDesc];
+						if (hCombined.length > 0) {
+							return NextResponse.json({ items: hCombined }, { headers: { 'Cache-Control': 'no-store' } });
+						}
+					} catch {}
 				}
 			} catch {}
 		}
@@ -395,6 +469,80 @@ export async function GET(req: Request) {
 						if (combined.length > 0) {
 							return NextResponse.json({ items: combined }, { headers: { 'Cache-Control': 'no-store' } });
 						}
+
+						// 3) heuristic fallback by tags/subject/description when field match fails
+						try {
+							const toSlug = (s: string) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, '-');
+							const tnormSlug = toSlug(normTarget);
+							let zTickets: any[] = [];
+							if (!tks.error && (tks.data ?? []).length > 0) {
+								zTickets = tks.data ?? [];
+							} else {
+								const { fetchIncrementalTickets } = await import('@/lib/vendors/zendesk_ext');
+								zTickets = await fetchIncrementalTickets(from, to);
+							}
+							const heuristic = zTickets.filter((t: any) => {
+								const tags: string[] = Array.isArray(t?.tags) ? t.tags.map((x: any) => String(x ?? '').toLowerCase()) : [];
+								const sub = String(t?.subject ?? '').toLowerCase();
+								const desc = String(t?.description ?? '').toLowerCase();
+								return tags.includes(tnormSlug) || tags.includes(normTarget.toLowerCase()) || sub.includes(normTarget) || desc.includes(normTarget);
+							});
+							let blocks: any[] = [];
+							const hIds = heuristic.map((t: any) => Number(t.id)).filter((x: any) => Number.isFinite(x));
+							if (hIds.length > 0) {
+								const chunkSize2 = 200;
+								for (let i = 0; i < hIds.length; i += chunkSize2) {
+									const chunk2 = hIds.slice(i, i + chunkSize2);
+									const comm2 = await supabaseAdmin
+										.from('raw_zendesk_comments')
+										.select('ticket_id, created_at, body')
+										.in('ticket_id', chunk2)
+										.order('created_at', { ascending: true });
+									let rows2: any[] = [];
+									if (!comm2.error && (comm2.data ?? []).length > 0) {
+										rows2 = comm2.data ?? [];
+									} else {
+										const { fetchTicketComments } = await import('@/lib/vendors/zendesk');
+										for (const tid of chunk2) {
+											const zc2 = await fetchTicketComments(Number(tid), 500);
+											rows2.push(...(zc2 ?? []).map((c: any) => ({
+												ticket_id: Number(tid),
+												created_at: String(c.created_at),
+												body: String(c.body ?? '')
+											})));
+										}
+									}
+									const grouped2 = new Map<number, string[]>();
+									for (const c of rows2) {
+										const arr = grouped2.get(Number(c.ticket_id)) ?? [];
+										const txt = cleanText(String(c.body ?? ''));
+										if (txt.trim().length > 0 && !isPhoneCall(txt)) arr.push(txt);
+										grouped2.set(Number(c.ticket_id), arr);
+									}
+									for (const [tid, arr] of grouped2.entries()) {
+										if (arr.length === 0) continue;
+										blocks.push({
+											inquiry_type: normTarget,
+											ticket_id: tid,
+											created_at: String((rows2.find((z: any) => Number(z.ticket_id) === tid)?.created_at) ?? from),
+											text_type: 'comments_block',
+											text_value: arr.join('\n')
+										});
+									}
+								}
+							}
+							const desc2 = heuristic.map((t: any) => ({
+								inquiry_type: normTarget,
+								ticket_id: Number(t.id),
+								created_at: String(t.created_at),
+								text_type: 'body',
+								text_value: cleanText(String(t.description ?? ''))
+							})).filter((r: any) => String(r.text_value ?? '').trim().length > 0 && !isPhoneCall(String(r.text_value ?? '')));
+							const hCombined = [...blocks, ...desc2];
+							if (hCombined.length > 0) {
+								return NextResponse.json({ items: hCombined }, { headers: { 'Cache-Control': 'no-store' } });
+							}
+						} catch {}
 					}
 				}
 			} catch {}
