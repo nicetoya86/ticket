@@ -159,9 +159,7 @@ export async function GET(req: Request) {
                 if (all.length > 0) break;
             }
         }
-        if (all.length === 0 && lastError) {
-            return NextResponse.json({ items: [], note: 'texts_error', message: lastError }, { status: 200, headers: { 'Cache-Control': 'no-store' } });
-        }
+        // Note: even if RPC errored for all candidates, proceed to external fallbacks below
 		if (filterByTicket) {
 			all = all.filter((r: any) => Number(r?.ticket_id) === ticketId);
 		}
@@ -388,9 +386,7 @@ export async function GET(req: Request) {
                 if (grouped.length > 0) break;
             }
         }
-        if (grouped.length === 0 && lastError) {
-            return NextResponse.json({ items: [], note: 'grouped_texts_error', message: lastError }, { status: 200, headers: { 'Cache-Control': 'no-store' } });
-        }
+        // Note: even if RPC errored for all candidates, proceed to external fallbacks below
         let items = grouped;
         // optional per-ticket filter for debugging
         if (filterByTicket) items = items.filter((r: any) => Number(r?.ticket_id) === ticketId);
