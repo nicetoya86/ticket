@@ -11,6 +11,7 @@ export async function GET(req: Request) {
 	const to = searchParams.get('to');
     const sources = searchParams.getAll('source[]');
     const categoryIds = searchParams.getAll('categoryId[]');
+    const source = searchParams.get('source') ?? '';
     const inquiryType = searchParams.get('inquiryType');
 	const metric = searchParams.get('metric') ?? 'tfidf';
 	const limit = Number(searchParams.get('limit') ?? 50);
@@ -20,6 +21,7 @@ export async function GET(req: Request) {
 
     // Branch 1: On-demand keywords for selected inquiry type from customer texts only
     if (inquiryType) {
+        const fieldTitleCandidates = ['문의유형(고객)', '문의유형', '문의 유형'];
         const normalizeType = (v: string): string => {
             const s = (v ?? '').trim();
             try {
@@ -31,30 +33,61 @@ export async function GET(req: Request) {
             return s;
         };
         const targetType = normalizeType(inquiryType);
-        // Fetch grouped texts and derive keywords client-side to honor latest bot/manager filters
-        // 1차: 상태 제한 없이 전체 상태에서 조회 (일부 기간은 closed 기준으로 비어있음)
-        const { data, error } = await supabaseAdmin.rpc('inquiries_texts_grouped_by_ticket', {
-            p_from: fromDate,
-            p_to: toDate,
-            p_field_title: '문의유형(고객)',
-            p_status: ''
-        });
-        if (error) {
-            console.error('[keywords/top] RPC inquiries_texts_grouped_by_ticket error:', error.message);
-            return NextResponse.json([], { status: 200, headers: { 'Cache-Control': 'no-store' } });
-        }
-        let rows = (data ?? []).filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === targetType);
-        // Fallback: if no grouped rows, try non-grouped texts
-        if (rows.length === 0) {
-            // 2차: closed 한정으로 다시 시도(그룹형만 사용해 발화자 구분을 보장)
-            const retry = await supabaseAdmin.rpc('inquiries_texts_grouped_by_ticket', {
+        // 1) Grouped texts (speaker-aware), try multiple titles and statuses
+        let rows: any[] = [];
+        for (const ft of fieldTitleCandidates) {
+            const r1 = await supabaseAdmin.rpc('inquiries_texts_grouped_by_ticket', {
                 p_from: fromDate,
                 p_to: toDate,
-                p_field_title: '문의유형(고객)',
-                p_status: 'closed'
+                p_field_title: ft,
+                p_status: ''
             });
-            if (!retry.error) {
-                rows = (retry.data ?? []).filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === targetType);
+            if (!r1.error) {
+                rows = (r1.data ?? []).filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === targetType);
+                if (rows.length > 0) break;
+            }
+        }
+        if (rows.length === 0) {
+            for (const ft of fieldTitleCandidates) {
+                const r2 = await supabaseAdmin.rpc('inquiries_texts_grouped_by_ticket', {
+                    p_from: fromDate,
+                    p_to: toDate,
+                    p_field_title: ft,
+                    p_status: 'closed'
+                });
+                if (!r2.error) {
+                    rows = (r2.data ?? []).filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === targetType);
+                    if (rows.length > 0) break;
+                }
+            }
+        }
+        // 2) Non-grouped texts fallback
+        if (rows.length === 0) {
+            for (const ft of fieldTitleCandidates) {
+                const t1 = await supabaseAdmin.rpc('inquiries_texts_by_type', {
+                    p_from: fromDate,
+                    p_to: toDate,
+                    p_field_title: ft,
+                    p_status: ''
+                });
+                if (!t1.error) {
+                    rows = (t1.data ?? []).filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === targetType);
+                    if (rows.length > 0) break;
+                }
+            }
+        }
+        if (rows.length === 0) {
+            for (const ft of fieldTitleCandidates) {
+                const t2 = await supabaseAdmin.rpc('inquiries_texts_by_type', {
+                    p_from: fromDate,
+                    p_to: toDate,
+                    p_field_title: ft,
+                    p_status: 'closed'
+                });
+                if (!t2.error) {
+                    rows = (t2.data ?? []).filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === targetType);
+                    if (rows.length > 0) break;
+                }
             }
         }
         // Extract only customer-authored text from aggregated blocks (robust speaker-aware)
@@ -84,13 +117,36 @@ export async function GET(req: Request) {
             return out.join('\n');
         }
         const blocks: string[] = rows.map((r: any) => String(r.text_value ?? ''));
-        // 접두사(이름:)가 한 줄이라도 존재하면 스피커 인식 파서를 사용
+        // 접두사(이름:)가 한 줄이라도 존재하면 스피커 인식 파서를 사용, 아니면 본문 사용
         const hasSpeakerPrefixes = blocks.some((b) => /^[^:\n]+:/m.test(b));
-        const customerText = hasSpeakerPrefixes
+        let textCorpus = hasSpeakerPrefixes
             ? blocks.map((b) => extractCustomerText(b)).join('\n')
-            : '';
+            : blocks.join('\n');
+
+        // 3) Zendesk 원천 폴백: 기간 내 티켓의 해당 문의유형 description 사용
+        if (!textCorpus.trim() && (source === 'zendesk' || (!source && sources.includes('zendesk')))) {
+            try {
+                const { fetchTicketFields, fetchIncrementalTickets } = await import('@/lib/vendors/zendesk_ext');
+                const fields = await fetchTicketFields();
+                const field = fields.find((f: any) => fieldTitleCandidates.includes(String(f?.title ?? '').trim()));
+                const tickets = await fetchIncrementalTickets(fromDate, toDate);
+                const limited = tickets.slice(0, 300);
+                const matched = field?.id
+                    ? limited.filter((t: any) => {
+                        const cfs: Array<{ id: number; value: any }> = Array.isArray(t?.custom_fields) ? t.custom_fields : [];
+                        const cf = cfs.find((c) => Number(c?.id) === Number(field.id));
+                        const v = cf?.value;
+                        const values: string[] = Array.isArray(v) ? v.map((x) => String(x ?? '').trim()) : [String(v ?? '').trim()];
+                        return values.some((vv) => normalizeType(vv) === targetType);
+                    })
+                    : [];
+                textCorpus = matched.map((t: any) => String(t?.description ?? '')).join('\n');
+            } catch (e) {
+                console.error('[keywords/top] Zendesk fallback error', (e as any)?.message ?? e);
+            }
+        }
         // Prefer GPT-based keyword extraction when available
-        const textForLLM = customerText.slice(0, 12000); // guard tokens
+        const textForLLM = textCorpus.slice(0, 12000); // guard tokens
         if (env.OPENAI_API_KEY && textForLLM.trim().length > 0) {
             try {
                 const resp = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -136,7 +192,7 @@ ${textForLLM}` }
             }
         }
         // Fallback: rule-based token frequency
-        const cleaned = customerText
+        const cleaned = textCorpus
             .replace(/https?:\/\/\S+/g, ' ')
             .replace(/[\p{P}\p{S}]+/gu, ' ')
             .toLowerCase();
