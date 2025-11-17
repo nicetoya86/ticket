@@ -67,45 +67,48 @@ export default function InquiriesClient() {
             setError(null);
             setItems([]);
             setShowResults(false);
-            const qs = new URLSearchParams({ fieldTitle: '문의유형(고객)', detail: 'texts' });
-            if (from) qs.set('from', from);
-            if (to) qs.set('to', to);
-            if (status) qs.set('status', status);
-            if (source) qs.set('source', source);
-            const res = await fetch(`/api/stats/inquiries?${qs.toString()}`, { cache: 'no-store' });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const json = await res.json();
-            const map = new Map<string, Set<number>>();
-            for (const r of (json.items ?? []) as any[]) {
-                const t = normalizeType(String(r?.inquiry_type ?? ''));
-                if (!t) continue;
-                const tid = Number(r?.ticket_id ?? 0);
-                if (!map.has(t)) map.set(t, new Set());
-                if (tid) map.get(t)!.add(tid);
+            async function loadTextsOptions(statusTry: string): Promise<InquiryOption[]> {
+                const qs = new URLSearchParams({ fieldTitle: '문의유형(고객)', detail: 'texts' });
+                if (from) qs.set('from', from);
+                if (to) qs.set('to', to);
+                if (statusTry !== undefined) qs.set('status', statusTry);
+                if (source) qs.set('source', source);
+                const res = await fetch(`/api/stats/inquiries?${qs.toString()}`, { cache: 'no-store' });
+                if (!res.ok) return [];
+                const json = await res.json();
+                const map = new Map<string, Set<number>>();
+                for (const r of (json.items ?? []) as any[]) {
+                    const t = normalizeType(String(r?.inquiry_type ?? ''));
+                    if (!t) continue;
+                    const tid = Number(r?.ticket_id ?? 0);
+                    if (!map.has(t)) map.set(t, new Set());
+                    if (tid) map.get(t)!.add(tid);
+                }
+                return Array.from(map.entries())
+                    .map(([inquiry_type, ids]) => ({ inquiry_type, ticket_count: ids.size }))
+                    .sort((a, b) => b.ticket_count - a.ticket_count);
             }
-            let opts = Array.from(map.entries())
-                .map(([inquiry_type, ids]) => ({ inquiry_type, ticket_count: ids.size }))
-                .sort((a, b) => b.ticket_count - a.ticket_count);
-
-            // texts가 비어 있으면 counts로 폴백해서 드롭다운 비활성화 방지
-            if (opts.length === 0) {
+            async function loadCountOptions(statusTry: string): Promise<InquiryOption[]> {
                 const qs2 = new URLSearchParams({ fieldTitle: '문의유형(고객)' });
                 if (from) qs2.set('from', from);
                 if (to) qs2.set('to', to);
-                if (status) qs2.set('status', status);
+                if (statusTry !== undefined) qs2.set('status', statusTry);
                 if (source) qs2.set('source', source);
                 const res2 = await fetch(`/api/stats/inquiries?${qs2.toString()}`, { cache: 'no-store' });
-                if (res2.ok) {
-                    const json2 = await res2.json();
-                    const seen = new Set<string>();
-                    const dedup = (json2.items ?? [])
-                        .map((r: any) => ({ inquiry_type: normalizeType(String(r?.inquiry_type ?? '')), ticket_count: Number(r?.ticket_count ?? 0) }))
-                        .filter((r: any) => r.inquiry_type)
-                        .sort((a: any, b: any) => b.ticket_count - a.ticket_count)
-                        .filter((r: any) => (seen.has(r.inquiry_type) ? false : (seen.add(r.inquiry_type), true)));
-                    opts = dedup;
-                }
+                if (!res2.ok) return [];
+                const json2 = await res2.json();
+                const seen = new Set<string>();
+                return (json2.items ?? [])
+                    .map((r: any) => ({ inquiry_type: normalizeType(String(r?.inquiry_type ?? '')), ticket_count: Number(r?.ticket_count ?? 0) }))
+                    .filter((r: any) => r.inquiry_type)
+                    .sort((a: any, b: any) => b.ticket_count - a.ticket_count)
+                    .filter((r: any) => (seen.has(r.inquiry_type) ? false : (seen.add(r.inquiry_type), true)));
             }
+
+            let opts = await loadTextsOptions(status || 'closed');
+            if (opts.length === 0) opts = await loadTextsOptions(''); // 전체 상태
+            if (opts.length === 0) opts = await loadCountOptions(status || 'closed');
+            if (opts.length === 0) opts = await loadCountOptions('');
 
             setOptions(opts);
             if (opts.length > 0) setInquiryType('');

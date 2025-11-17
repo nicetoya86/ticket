@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { supabasePublic, supabaseAdmin } from '@/lib/supabaseServer';
 import { env } from '@/lib/env';
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 function extractRef(jwt: string | undefined | null) {
 	try {
 		if (!jwt) return null;

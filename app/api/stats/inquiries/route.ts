@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+
 export async function GET(req: Request) {
     // If Supabase runtime config is missing in hosting env, return empty result instead of 500
     const hasConfig = Boolean(process.env.SUPABASE_ANON_KEY && process.env.SUPABASE_SERVICE_ROLE_KEY && (process.env.SUPABASE_URL || process.env.SUPABASE_PROJECT_ID));
@@ -128,11 +131,37 @@ export async function GET(req: Request) {
         return s;
     };
 
+    // Candidate field titles to improve robustness across sources/forms
+    const fieldTitleCandidates = Array.from(new Set<string>([
+        fieldTitle,
+        '문의유형',
+        '문의 유형',
+        '문의유형(고객)'
+    ])).filter((v) => typeof v === 'string' && v.trim().length > 0);
+
     // texts: always return raw body-derived texts; ignore group to honor "body only" requirement
 	if (detail === 'texts') {
-		const { data, error } = await supabaseAdmin.rpc('inquiries_texts_by_type', { p_from: from, p_to: to, p_field_title: fieldTitle, p_status: status });
-		if (error) return NextResponse.json({ items: [], note: 'texts_error', message: error.message }, { status: 200, headers: { 'Cache-Control': 'no-store' } });
-		let all = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
+        let all: any[] = [];
+        let lastError: string | null = null;
+        // Try with provided status first
+        for (const ft of fieldTitleCandidates) {
+            const { data, error } = await supabaseAdmin.rpc('inquiries_texts_by_type', { p_from: from, p_to: to, p_field_title: ft, p_status: status });
+            if (error) { lastError = error.message; continue; }
+            all = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
+            if (all.length > 0) break;
+        }
+        // Retry without status restriction if empty
+        if (all.length === 0 && status) {
+            for (const ft of fieldTitleCandidates) {
+                const { data, error } = await supabaseAdmin.rpc('inquiries_texts_by_type', { p_from: from, p_to: to, p_field_title: ft, p_status: '' });
+                if (error) { lastError = error.message; continue; }
+                all = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
+                if (all.length > 0) break;
+            }
+        }
+        if (all.length === 0 && lastError) {
+            return NextResponse.json({ items: [], note: 'texts_error', message: lastError }, { status: 200, headers: { 'Cache-Control': 'no-store' } });
+        }
 		if (filterByTicket) {
 			all = all.filter((r: any) => Number(r?.ticket_id) === ticketId);
 		}
@@ -160,9 +189,26 @@ export async function GET(req: Request) {
 		}
 		return NextResponse.json(payload, { headers: { 'Cache-Control': 'no-store' } });
     } else if (group) {
-        const { data, error } = await supabaseAdmin.rpc('inquiries_texts_grouped_by_ticket', { p_from: from, p_to: to, p_field_title: fieldTitle, p_status: status });
-        if (error) return NextResponse.json({ items: [], note: 'grouped_texts_error', message: error.message }, { status: 200, headers: { 'Cache-Control': 'no-store' } });
-        let items = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
+        let grouped: any[] = [];
+        let lastError: string | null = null;
+        for (const ft of fieldTitleCandidates) {
+            const { data, error } = await supabaseAdmin.rpc('inquiries_texts_grouped_by_ticket', { p_from: from, p_to: to, p_field_title: ft, p_status: status });
+            if (error) { lastError = error.message; continue; }
+            grouped = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
+            if (grouped.length > 0) break;
+        }
+        if (grouped.length === 0 && status) {
+            for (const ft of fieldTitleCandidates) {
+                const { data, error } = await supabaseAdmin.rpc('inquiries_texts_grouped_by_ticket', { p_from: from, p_to: to, p_field_title: ft, p_status: '' });
+                if (error) { lastError = error.message; continue; }
+                grouped = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
+                if (grouped.length > 0) break;
+            }
+        }
+        if (grouped.length === 0 && lastError) {
+            return NextResponse.json({ items: [], note: 'grouped_texts_error', message: lastError }, { status: 200, headers: { 'Cache-Control': 'no-store' } });
+        }
+        let items = grouped;
         // optional per-ticket filter for debugging
         if (filterByTicket) items = items.filter((r: any) => Number(r?.ticket_id) === ticketId);
         // inquiry type filter
@@ -180,19 +226,64 @@ export async function GET(req: Request) {
         return NextResponse.json({ items }, { headers: { 'Cache-Control': 'no-store' } });
     }
 
-    const { data, error } = await supabaseAdmin.rpc('unified_inquiries_by_type', { p_from: from, p_to: to, p_field_title: fieldTitle, p_status: status });
-    let items = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
-    if (error || items.length === 0) {
-        // Fallback: derive counts from grouped texts
-        const fb = await supabaseAdmin.rpc('inquiries_texts_grouped_by_ticket', { p_from: from, p_to: to, p_field_title: fieldTitle, p_status: status });
-        if (!fb.error) {
-            const map = new Map<string, number>();
-            for (const row of fb.data ?? []) {
-                const t = row?.inquiry_type as string | null;
-                if (!t || String(t).startsWith('병원_')) continue;
-                map.set(t, (map.get(t) ?? 0) + 1);
+    // Aggregated counts with robust fallbacks
+    let items: any[] = [];
+    let lastAggError: string | null = null;
+    for (const ft of fieldTitleCandidates) {
+        const { data, error } = await supabaseAdmin.rpc('unified_inquiries_by_type', { p_from: from, p_to: to, p_field_title: ft, p_status: status });
+        if (error) { lastAggError = error.message; continue; }
+        items = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
+        if (items.length > 0) break;
+    }
+    if (items.length === 0 && status) {
+        for (const ft of fieldTitleCandidates) {
+            const { data, error } = await supabaseAdmin.rpc('unified_inquiries_by_type', { p_from: from, p_to: to, p_field_title: ft, p_status: '' });
+            if (error) { lastAggError = error.message; continue; }
+            items = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
+            if (items.length > 0) break;
+        }
+    }
+    if (items.length === 0) {
+        for (const ft of fieldTitleCandidates) {
+            const fb = await supabaseAdmin.rpc('inquiries_texts_grouped_by_ticket', { p_from: from, p_to: to, p_field_title: ft, p_status: status });
+            if (!fb.error) {
+                const map = new Map<string, number>();
+                for (const row of fb.data ?? []) {
+                    const t = row?.inquiry_type as string | null;
+                    if (!t || String(t).startsWith('병원_')) continue;
+                    map.set(t, (map.get(t) ?? 0) + 1);
+                }
+                const derived = Array.from(map.entries()).map(([inquiry_type, ticket_count]) => ({ inquiry_type, ticket_count })).sort((a, b) => b.ticket_count - a.ticket_count);
+                if (derived.length > 0) { items = derived; break; }
+            } else {
+                lastAggError = fb.error.message;
             }
-            items = Array.from(map.entries()).map(([inquiry_type, ticket_count]) => ({ inquiry_type, ticket_count })).sort((a, b) => b.ticket_count - a.ticket_count);
+        }
+    }
+
+    // Final fallback for Zendesk: derive "문의유형"을 태그 기반으로 생성 (기간 내 티켓에서 가장 많이 등장한 태그 상위)
+    if (items.length === 0 && (source === 'zendesk' || source === '')) {
+        const { data: tickets, error: tErr } = await supabaseAdmin
+            .from('raw_zendesk_tickets')
+            .select('id, created_at, tags')
+            .gte('created_at', from)
+            .lte('created_at', to)
+            .limit(10000);
+        if (!tErr && Array.isArray(tickets)) {
+            const counter = new Map<string, number>();
+            for (const t of tickets) {
+                const tags: string[] = Array.isArray((t as any)?.tags) ? (t as any).tags : [];
+                for (const tag of tags) {
+                    const k = String(tag ?? '').trim();
+                    if (!k) continue;
+                    counter.set(k, (counter.get(k) ?? 0) + 1);
+                }
+            }
+            const derived = [...counter.entries()]
+                .map(([inquiry_type, ticket_count]) => ({ inquiry_type, ticket_count }))
+                .sort((a, b) => b.ticket_count - a.ticket_count)
+                .slice(0, 200);
+            if (derived.length > 0) items = derived;
         }
     }
     return NextResponse.json({ items }, { headers: { 'Cache-Control': 'no-store' } });
