@@ -3,6 +3,9 @@ import { FilterBar } from '@/components/FilterBar';
 import { Suspense } from 'react';
 import KeywordsClient from '@/components/KeywordsClient2';
 
+export const revalidate = 0;
+export const dynamic = 'force-dynamic';
+
 export default function KeywordsPage() {
 	return (
 		<main className="container-page py-8">

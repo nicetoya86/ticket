@@ -7,6 +7,8 @@ export const metadata: Metadata = {
 	description: 'Zendesk/Channel 통합 CS 카테고리/키워드 분석'
 };
 
+export const dynamic = 'force-dynamic';
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
 	return (
 		<html lang="ko">

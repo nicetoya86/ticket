@@ -5,7 +5,8 @@ async function sleep(ms: number) {
 }
 
 import { supabaseAdmin } from '@/lib/supabaseServer';
-import { fetchIncrementalTicketsSince, fetchTicketComments } from '@/lib/vendors/zendesk';
+import { fetchIncrementalTicketsSince, fetchTicketComments, fetchTicketFields } from '@/lib/vendors/zendesk';
+import { env } from '@/lib/env';
 
 export async function runIngestIncremental(): Promise<JobResult> {
 	try {
@@ -25,20 +26,24 @@ export async function runIngestIncremental(): Promise<JobResult> {
 				description: t.description ?? null,
 				requester_id: t.requester_id ?? null,
 				org_id: t.organization_id ?? null,
-				custom_fields: t.custom_fields ? JSON.stringify(t.custom_fields) : null,
+				// Store as JSONB by passing objects/arrays directly
+				custom_fields: t.custom_fields ?? null,
 				tags: t.tags ?? null,
 				status: t.status ?? null,
 				priority: t.priority ?? null,
 				channel: t.via?.channel ?? null,
-				raw_json: JSON.stringify(t)
+				// Keep full source payload for traceability
+				raw_json: t as unknown as Record<string, any>
 			}));
 			const { error: e1 } = await supabaseAdmin.from('raw_zendesk_tickets').upsert(rows, { onConflict: 'id' });
 			if (e1) throw e1;
 		}
 
-		// comments (best-effort, limited)
-		for (const t of tickets.slice(0, 50)) {
-			const comments = await fetchTicketComments(t.id, 200);
+		// comments (configurable)
+		const ticketLimit = Number(env.ZENDESK_COMMENTS_TICKET_LIMIT || 200);
+		const perTicket = Number(env.ZENDESK_COMMENTS_PER_TICKET || 500);
+		for (const t of tickets.slice(0, Math.max(0, ticketLimit))) {
+			const comments = await fetchTicketComments(t.id, perTicket);
 			if (comments.length > 0) {
 				const crows = comments.map((c) => ({
 					ticket_id: t.id,
@@ -46,7 +51,7 @@ export async function runIngestIncremental(): Promise<JobResult> {
 					author_id: c.author_id ?? null,
 					created_at: c.created_at,
 					body: c.body ?? null,
-					raw_json: JSON.stringify(c)
+					raw_json: c as unknown as Record<string, any>
 				}));
 				const { error: e2 } = await supabaseAdmin.from('raw_zendesk_comments').upsert(crows, { onConflict: 'ticket_id,comment_id' });
 				if (e2) throw e2;
@@ -105,13 +110,38 @@ export async function runKeywordsPipeline(): Promise<JobResult> {
 	return { ok: true };
 }
 
+export async function runSyncZendeskFields(): Promise<JobResult> {
+	try {
+		const fields = await fetchTicketFields();
+		if (fields.length === 0) return { ok: true };
+		const rows = fields.map((f: any) => ({
+			id: Number(f.id),
+			type: String(f.type ?? ''),
+			title: String(f.title ?? ''),
+			key: typeof f.key === 'string' ? f.key : null,
+			raw_json: f as Record<string, any>,
+		}));
+		const { error } = await supabaseAdmin.from('zd_ticket_fields').upsert(rows, { onConflict: 'id' });
+		if (error) throw error;
+		return { ok: true };
+	} catch (e: any) {
+		return { ok: false, error: e.message ?? 'sync_fields_failed' };
+	}
+}
+
 export async function withRetries(fn: () => Promise<JobResult>, max = 3): Promise<JobResult> {
 	let attempt = 0;
+	let lastError: string | undefined;
 	while (attempt < max) {
-		const res = await fn();
-		if (res.ok) return res;
+		try {
+			const res = await fn();
+			if (res.ok) return res;
+			lastError = res.error;
+		} catch (e: any) {
+			lastError = e?.message ?? String(e ?? 'unknown_error');
+		}
 		attempt += 1;
 		await sleep(2 ** attempt * 250);
 	}
-	return { ok: false, error: 'max_retries_exceeded' };
+	return { ok: false, error: lastError ?? 'max_retries_exceeded' };
 }

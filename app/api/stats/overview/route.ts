@@ -18,7 +18,10 @@ export async function GET(req: Request) {
 		.order('date', { ascending: true });
 	if (sources.length > 0) query = query.in('source', sources);
 	const { data: totals, error } = await query;
-	if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+	if (error) {
+		console.error('[stats/overview] Supabase totals error:', error.message);
+		return NextResponse.json({ totals: [], byCategory: [] }, { status: 200, headers: { 'Cache-Control': 'no-store' } });
+	}
 
 	const { data: byCategory, error: e2 } = await supabaseAdmin
 		.from('stats_daily')
@@ -26,7 +29,10 @@ export async function GET(req: Request) {
 		.eq('date', toDate)
 		.order('count', { ascending: false })
 		.limit(50);
-	if (e2) return NextResponse.json({ error: e2.message }, { status: 500 });
+	if (e2) {
+		console.error('[stats/overview] Supabase byCategory error:', e2.message);
+		return NextResponse.json({ totals: totals ?? [], byCategory: [] }, { status: 200, headers: { 'Cache-Control': 'no-store' } });
+	}
 
-	return NextResponse.json({ totals, byCategory });
+	return NextResponse.json({ totals, byCategory }, { headers: { 'Cache-Control': 'no-store' } });
 }

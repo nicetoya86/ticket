@@ -14,6 +14,7 @@ const serverEnvSchema = z.object({
     CHANNEL_ACCESS_KEY: z.string().optional(),
     CHANNEL_ACCESS_SECRET: z.string().optional(),
     JWT_SECRET: z.string().optional(),
+    OPENAI_API_KEY: z.string().optional(),
     // Optional tuning for Zendesk comments ingestion
     ZENDESK_COMMENTS_TICKET_LIMIT: z.string().optional(),
     ZENDESK_COMMENTS_PER_TICKET: z.string().optional(),

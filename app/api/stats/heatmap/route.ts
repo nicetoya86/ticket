@@ -16,6 +16,9 @@ export async function GET(req: Request) {
 		p_to: toDate,
 		p_sources: sourceParam
 	});
-	if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-	return NextResponse.json(data ?? []);
+	if (error) {
+		console.error('[stats/heatmap] Supabase RPC error:', error.message);
+		return NextResponse.json([], { status: 200, headers: { 'Cache-Control': 'no-store' } });
+	}
+	return NextResponse.json(data ?? [], { headers: { 'Cache-Control': 'no-store' } });
 }

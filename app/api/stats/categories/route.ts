@@ -20,7 +20,10 @@ export async function GET(req: Request) {
 	if (categoryIds.length > 0) query = query.in('category_id', categoryIds);
 
 	const { data, error } = await query.limit(5000);
-	if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+	if (error) {
+		console.error('[stats/categories] Supabase query error:', error.message);
+		return NextResponse.json([], { status: 200, headers: { 'Cache-Control': 'no-store' } });
+	}
 
 	const agg = new Map<string, { categoryId: string; count: number; wow: number | null; yoy: number | null }>();
 	for (const row of data ?? []) {
@@ -31,5 +34,5 @@ export async function GET(req: Request) {
 	}
 
 	const items = [...agg.values()].sort((a, b) => b.count - a.count);
-	return NextResponse.json(items);
+	return NextResponse.json(items, { headers: { 'Cache-Control': 'no-store' } });
 }

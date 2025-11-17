@@ -5,7 +5,8 @@
 - `vercel.json`의 크론에 따라 정기 호출됩니다.
 
 ## 환경변수 (Vercel Project Settings > Environment Variables)
-- 필수: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `JWT_SECRET`
+- 필수: `SUPABASE_URL` 또는 `SUPABASE_PROJECT_ID` 중 하나, 그리고 `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `JWT_SECRET`
+- 설명: `SUPABASE_PROJECT_ID`(예: `ugvnqlhvrmihezrdchal`)만 제공해도 내부에서 `https://<PROJECT_ID>.supabase.co`로 URL이 자동 유도됩니다. 두 값을 모두 줄 경우 서로 일치해야 합니다.
 - 선택(지금은 비워둬도 됨): `ZENDESK_SUBDOMAIN`, `ZENDESK_EMAIL`, `ZENDESK_API_TOKEN`, `CHANNEL_ACCESS_KEY`, `CHANNEL_ACCESS_SECRET`
 - 선택: `DB_URL`
 

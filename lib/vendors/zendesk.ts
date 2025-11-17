@@ -69,3 +69,13 @@ export async function fetchTicketComments(ticketId: number, limit = 200): Promis
 	}
 	return results.slice(0, limit);
 }
+
+export async function fetchTicketFields(): Promise<any[]> {
+	const base = getBaseUrl();
+	const headers = { Authorization: getAuthHeader(), 'Content-Type': 'application/json' } as const;
+	const url = `${base}/api/v2/ticket_fields.json`;
+	const res = await fetch(url, { headers, cache: 'no-store' });
+	if (!res.ok) throw new Error(`Zendesk ticket_fields HTTP ${res.status}`);
+	const json = (await res.json()) as { ticket_fields?: any[] };
+	return json.ticket_fields ?? [];
+}

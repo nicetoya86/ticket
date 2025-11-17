@@ -16,6 +16,7 @@ export default function InquiriesClient() {
     const [options, setOptions] = useState<InquiryOption[]>([]);
     const [items, setItems] = useState<InquiryText[]>([]);
     const [showResults, setShowResults] = useState<boolean>(false);
+    const [summary, setSummary] = useState<{ summary: string; themes?: { title: string; evidence: string[] }[]; actions?: string[] } | null>(null);
 
     // 검색 조건 변경 시 상태 초기화 (검색 전에는 드롭다운/결과 비활성화 유지)
     useEffect(() => {
@@ -35,6 +36,28 @@ export default function InquiriesClient() {
             }
         } catch {}
         return s;
+    }
+
+    // 3단계: GPT 요약/분석
+    async function analyzeWithGPT() {
+        try {
+            setLoading(true);
+            setError(null);
+            setSummary(null);
+            const qs = new URLSearchParams({ inquiryType: normalizeType(inquiryType) });
+            if (from) qs.set('from', from);
+            if (to) qs.set('to', to);
+            if (status) qs.set('status', status);
+            if (source) qs.set('source', source);
+            const res = await fetch(`/api/inquiries/analyze?${qs.toString()}`, { cache: 'no-store' });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const json = await res.json();
+            setSummary(json);
+        } catch (e: any) {
+            setError(e.message ?? 'failed');
+        } finally {
+            setLoading(false);
+        }
     }
 
     // 1단계: 검색 → 기간/상태에 텍스트가 실제 존재하는 문의유형 로드
@@ -161,6 +184,7 @@ export default function InquiriesClient() {
                     </select>
                 </label>
                 <button disabled={!canAnalyze || loading} className="btn-outline disabled:opacity-50" onClick={loadTexts}>내용 확인</button>
+                <button disabled={!canAnalyze || loading} className="btn-outline disabled:opacity-50" onClick={analyzeWithGPT}>GPT 요약</button>
             </div>
 
             {showResults && (
@@ -180,6 +204,38 @@ export default function InquiriesClient() {
                             )}
                         </tbody>
                     </table>
+                </div>
+            )}
+
+            {summary && (
+                <div className="card p-4 space-y-3">
+                    <h3 className="font-semibold">GPT 요약</h3>
+                    <p className="text-sm whitespace-pre-wrap">{summary.summary}</p>
+                    {(summary.themes ?? []).length > 0 && (
+                        <div className="text-sm space-y-1">
+                            <div className="font-medium">주요 테마</div>
+                            <ul className="list-disc pl-5">
+                                {(summary.themes ?? []).map((t, i) => (
+                                    <li key={i}>
+                                        <span className="font-medium">{t.title}</span>
+                                        {(t.evidence ?? []).length > 0 && (
+                                            <ul className="list-disc pl-5 text-gray-600">
+                                                {t.evidence.map((e, j) => (<li key={j}>{e}</li>))}
+                                            </ul>
+                                        )}
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+                    {(summary.actions ?? []).length > 0 && (
+                        <div className="text-sm space-y-1">
+                            <div className="font-medium">권장 액션</div>
+                            <ul className="list-disc pl-5">
+                                {(summary.actions ?? []).map((a, i) => (<li key={i}>{a}</li>))}
+                            </ul>
+                        </div>
+                    )}
                 </div>
             )}
         </div>

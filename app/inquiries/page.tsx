@@ -1,6 +1,9 @@
 import { Suspense } from 'react';
 import InquiriesClient from '@/components/InquiriesClient';
 
+export const revalidate = 0;
+export const dynamic = 'force-dynamic';
+
 export default function InquiriesPage() {
 	return (
         <main className="container-page py-8">

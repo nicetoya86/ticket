@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabaseServer';
+import { env } from '@/lib/env';
+
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
 export async function GET(req: Request) {
 	const { searchParams } = new URL(req.url);
@@ -82,7 +86,53 @@ export async function GET(req: Request) {
         const customerText = hasSpeakerPrefixes
             ? blocks.map((b) => extractCustomerText(b)).join('\n')
             : '';
-        // Tokenize and aggregate
+        // Prefer GPT-based keyword extraction when available
+        const textForLLM = customerText.slice(0, 12000); // guard tokens
+        if (env.OPENAI_API_KEY && textForLLM.trim().length > 0) {
+            try {
+                const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        model: 'gpt-4o-mini',
+                        messages: [
+                            { role: 'system', content: '당신은 한국어 고객 상담 텍스트에서 핵심 키워드를 추출하는 데이터 분석가입니다.' },
+                            { role: 'user', content: [
+                                { type: 'text', text: `다음 고객 텍스트에서 의미 있는 키워드 상위 ${Math.min(limit, 10)}개를 추출하세요.
+요구사항:
+- 한국어 형태소 기준으로 의미 있는 단어/구를 선정
+- 브랜드명/운영체제/플랫폼 일반 용어(iOS, Android 등)와 조사/어미/숫자/URL 제거
+- 각 키워드에 중요도 점수를 0~1 사이로 부여
+- JSON 배열로만 응답: [{"keyword":"...","score":0.XX}]
+텍스트:
+${textForLLM}` }
+                            ] }
+                        ],
+                        temperature: 0.2
+                    })
+                });
+                if (resp.ok) {
+                    const j = await resp.json();
+                    const content = j?.choices?.[0]?.message?.content ?? '';
+                    // try parse json from content
+                    const match = content.match(/\[[\s\S]*\]/);
+                    if (match) {
+                        const parsed = JSON.parse(match[0]) as { keyword: string; score?: number }[];
+                        const items = parsed
+                            .filter((x) => typeof x?.keyword === 'string' && x.keyword.trim())
+                            .slice(0, Math.min(limit, 10))
+                            .map((x) => ({ keyword: x.keyword.trim(), tfidf: Math.round(((x.score ?? 0) * 1000)) / 1000 }));
+                        if (items.length > 0) return NextResponse.json(items, { headers: { 'Cache-Control': 'no-store' } });
+                    }
+                }
+            } catch (e) {
+                console.error('[keywords/top] OpenAI error', (e as any)?.message ?? e);
+            }
+        }
+        // Fallback: rule-based token frequency
         const cleaned = customerText
             .replace(/https?:\/\/\S+/g, ' ')
             .replace(/[\p{P}\p{S}]+/gu, ' ')
@@ -90,7 +140,6 @@ export async function GET(req: Request) {
         const tokens = cleaned.split(/\s+/).filter(Boolean);
         const stop = new Set<string>([
             '및','그리고','에서','으로','으로는','에','은','는','이','가','을','를','도','만','과','와','요','게','좀','좀요','이나','나','으로의','으로도',
-            // iOS/Android user 제외
             'ios','android','user','iosuser','androiduser'
         ]);
         const freq = new Map<string, number>();
@@ -101,7 +150,7 @@ export async function GET(req: Request) {
             freq.set(tok, (freq.get(tok) ?? 0) + 1);
         }
         const top = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, Math.min(limit, 10)).map(([keyword, freq]) => ({ keyword, freq }));
-        return NextResponse.json(top);
+        return NextResponse.json(top, { headers: { 'Cache-Control': 'no-store' } });
     }
 
     // Branch 2: legacy aggregated keywords table (fallback)
