@@ -95,7 +95,7 @@ export default function InquiriesClient() {
             setShowResults(true);
             setLoading(true);
             setError(null);
-            // 타임라인 형태로 보기 위해 group=1 사용, 서버에서 inquiryType 필터 적용
+            // 타임라인 형태로 보기 위해 group=1 우선 시도
             const qs = new URLSearchParams({ fieldTitle: '문의유형(고객)', group: '1', inquiryType: normalizeType(inquiryType) });
             if (from) qs.set('from', from);
             if (to) qs.set('to', to);
@@ -104,9 +104,23 @@ export default function InquiriesClient() {
             const res = await fetch(`/api/stats/inquiries?${qs.toString()}`, { cache: 'no-store' });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const json = await res.json();
-            // 서버에서 inquiryTypeParam으로 필터링됨
-            const rows: InquiryText[] = (json.items ?? []);
-            setItems(rows);
+            let rows: InquiryText[] = (json.items ?? []);
+
+            // 그룹 결과가 비면, 본문 기반(detail=texts)으로 폴백 시도
+            if ((rows ?? []).length === 0) {
+                const qs2 = new URLSearchParams({ fieldTitle: '문의유형(고객)', detail: 'texts', inquiryType: normalizeType(inquiryType) });
+                if (from) qs2.set('from', from);
+                if (to) qs2.set('to', to);
+                if (status) qs2.set('status', status);
+                if (source) qs2.set('source', source);
+                const res2 = await fetch(`/api/stats/inquiries?${qs2.toString()}`, { cache: 'no-store' });
+                if (res2.ok) {
+                    const json2 = await res2.json();
+                    rows = (json2.items ?? []);
+                }
+            }
+
+            setItems(rows ?? []);
         } catch (e: any) {
             setError(e.message ?? 'failed');
         } finally {
