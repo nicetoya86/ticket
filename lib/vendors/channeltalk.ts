@@ -174,42 +174,52 @@ export async function listUserChats(from: string, to: string, limit = 5000): Pro
 				startMs: cursorStart,
 				endMs: cursorEnd,
 				startDate: toKstDateString(cursorStart),
-				endDate: toKstDateString(cursorEnd),
+				endDate: toKstDateString(cursorEnd + 1000), // Ensure end date includes the full day
 			});
 			cursorStart = cursorEnd + ONE_DAY_MS;
 		}
 	} else {
-		dateWindows.push({ startMs: fromMs, endMs: toMs, startDate: from ?? undefined, endDate: to ?? undefined });
+		dateWindows.push({ startMs: fromMs, endMs: toMs, startDate: from ?? undefined, endDate: toKstDateString((toMs ?? 0) + 1000) ?? to ?? undefined });
 	}
 
 	for (const window of dateWindows) {
 		for (const state of states) {
-			let cursor: string | null = null;
+			let cursor = '';
 			for (let i = 0; i < 200 && results.length < limit * 3; i++) {
-				const json: any = await apiGet('/open/v5/user-chats', {
+				const params: any = {
 					limit: pageSize,
 					state,
-					cursor: cursor ?? '',
-					// startDate: window.startDate ?? undefined,
-					// endDate: window.endDate ?? undefined,
-					createdAtFrom: window.startMs ?? undefined,
-					createdAtTo: window.endMs ?? undefined,
-				});
+					cursor,
+				};
+
+				// Add date parameters only if they exist (like channel_backfill_http.js)
+				if (window.startDate) {
+					params.startDate = window.startDate;
+					params.createdAtFrom = `${window.startDate}T00:00:00+09:00`;
+				}
+				if (window.endDate) {
+					params.endDate = window.endDate;
+					params.createdAtTo = `${window.endDate}T23:59:59+09:00`;
+				}
+
+				const json: any = await apiGet('/open/v5/user-chats', params);
 				const rows = Array.isArray(json?.userChats) ? json.userChats : [];
+
 				for (const c of rows) {
 					const createdAtRaw = Number((c as any)?.createdAt ?? 0);
 					if (window.startMs && createdAtRaw && createdAtRaw < window.startMs) continue;
 					if (window.endMs && createdAtRaw && createdAtRaw > window.endMs) continue;
 					const id = (c as any)?.id ?? (c as any)?.chatId ?? (c as any)?._id ?? null;
-					if (id == null) continue;
-					const name = (c as any)?.name ?? (c as any)?.profile?.name ?? null;
-					const tagList = extractTags(c);
-					const tags = tagList.length > 0 ? tagList : null;
-					const createdAt = toIsoDateTime(createdAtRaw || (c as any)?.created_at);
-					results.push({ id, name, tags, createdAt });
+					if (!id) continue;
+					if (results.find((r) => r.id === id)) continue;
+					results.push({
+						id,
+						createdAt: toIsoDateTime((c as any)?.createdAt),
+						tags: (c as any)?.tags ?? [],
+					});
 					if (results.length >= limit * 3) break;
 				}
-				const nextCursor = typeof json?.next === 'string' && json.next ? json.next : (typeof json?.nextCursor === 'string' ? json.nextCursor : null);
+				const nextCursor = json?.next ?? null;
 				if (!nextCursor) break;
 				cursor = nextCursor;
 			}
