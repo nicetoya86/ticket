@@ -174,59 +174,96 @@ export async function listUserChats(from: string, to: string, limit = 5000): Pro
 				startMs: cursorStart,
 				endMs: cursorEnd,
 				startDate: toKstDateString(cursorStart),
-				endDate: toKstDateString(cursorEnd + 1000), // Ensure end date includes the full day
+				endDate: toKstDateString(cursorEnd),
 			});
 			cursorStart = cursorEnd + ONE_DAY_MS;
 		}
 	} else {
-		dateWindows.push({ startMs: fromMs, endMs: toMs, startDate: from ?? undefined, endDate: toKstDateString((toMs ?? 0) + 1000) ?? to ?? undefined });
+		dateWindows.push({ startMs: fromMs, endMs: toMs, startDate: from ?? undefined, endDate: toKstDateString(toMs ?? 0) ?? to ?? undefined });
 	}
 
-	for (const window of dateWindows) {
-		for (const state of states) {
-			let cursor = '';
-			for (let i = 0; i < 200 && results.length < limit * 3; i++) {
-				const params: any = {
-					limit: pageSize,
-					state,
-					cursor,
-				};
+	// Fetch chats from both states in parallel for speed
+	const statePromises = states.map(async (state) => {
+		const stateResults: typeof results = [];
+		let cursor = '';
 
-				// Add date parameters only if they exist (like channel_backfill_http.js)
-				if (window.startDate) {
-					params.startDate = window.startDate;
-					params.createdAtFrom = `${window.startDate}T00:00:00+09:00`;
-				}
-				if (window.endDate) {
-					params.endDate = window.endDate;
-					params.createdAtTo = `${window.endDate}T23:59:59+09:00`;
+		for (let i = 0; i < 200 && stateResults.length < limit * 3; i++) {
+			const params: any = {
+				limit: 200, // Increased from pageSize for faster fetching
+				state,
+				cursor,
+			};
+
+			// Remove date parameters - API ignores them anyway
+
+			const json: any = await apiGet('/open/v5/user-chats', params);
+			const rows = Array.isArray(json?.userChats) ? json.userChats : [];
+
+			let foundInRange = false;
+			let beforeRange = false;
+
+			for (const c of rows) {
+				const createdAtRaw = Number((c as any)?.createdAt ?? 0);
+
+				// Check if this chat is before our date range (too old)
+				if (fromMs && createdAtRaw && createdAtRaw < fromMs) {
+					beforeRange = true;
+					continue;
 				}
 
-				const json: any = await apiGet('/open/v5/user-chats', params);
-				const rows = Array.isArray(json?.userChats) ? json.userChats : [];
-
-				for (const c of rows) {
-					const createdAtRaw = Number((c as any)?.createdAt ?? 0);
-					if (window.startMs && createdAtRaw && createdAtRaw < window.startMs) continue;
-					if (window.endMs && createdAtRaw && createdAtRaw > window.endMs) continue;
-					const id = (c as any)?.id ?? (c as any)?.chatId ?? (c as any)?._id ?? null;
-					if (!id) continue;
-					if (results.find((r) => r.id === id)) continue;
-					results.push({
-						id,
-						createdAt: toIsoDateTime((c as any)?.createdAt),
-						tags: (c as any)?.tags ?? [],
-					});
-					if (results.length >= limit * 3) break;
+				// Check if this chat is after our date range (too new)
+				if (toMs && createdAtRaw && createdAtRaw > toMs) {
+					continue;
 				}
-				const nextCursor = json?.next ?? null;
-				if (!nextCursor) break;
-				cursor = nextCursor;
+
+				// This chat is in range!
+				foundInRange = true;
+
+				const id = (c as any)?.id ?? (c as any)?.chatId ?? (c as any)?._id ?? null;
+				if (!id) continue;
+				if (stateResults.find((r) => r.id === id)) continue;
+
+				stateResults.push({
+					id,
+					createdAt: toIsoDateTime((c as any)?.createdAt),
+					tags: (c as any)?.tags ?? [],
+				});
+
+				if (stateResults.length >= limit * 3) break;
 			}
-			if (results.length >= limit) break;
+
+			// Early termination logic:
+			// Only stop if we've found enough chats in range AND now seeing chats before range
+			if (stateResults.length >= limit && beforeRange) {
+				break;
+			}
+
+			// Continue pagination if:
+			// - We haven't found enough results yet
+			// - OR we're still seeing chats in or after our target range
+
+			const nextCursor = json?.next ?? null;
+			if (!nextCursor) break;
+			cursor = nextCursor;
 		}
-		if (results.length >= limit) break;
+
+		return stateResults;
+	});
+
+	// Wait for all states to complete in parallel
+	const allStateResults = await Promise.all(statePromises);
+
+	// Merge results from all states
+	for (const stateResults of allStateResults) {
+		for (const chat of stateResults) {
+			if (!results.find((r) => r.id === chat.id)) {
+				results.push(chat);
+			}
+			if (results.length >= limit * 3) break;
+		}
+		if (results.length >= limit * 3) break;
 	}
+
 	const sliced = results.slice(0, limit);
 	userChatsCache.set(cacheKey, { updatedAt: Date.now(), data: sliced });
 	return sliced;
