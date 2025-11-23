@@ -31,7 +31,7 @@ create table if not exists raw_zendesk_comments (
 );
 
 create table if not exists raw_channel_conversations (
-	id bigint primary key,
+	id text primary key,
 	created_at timestamptz not null,
 	updated_at timestamptz not null,
 	assignee text,
@@ -43,8 +43,8 @@ create table if not exists raw_channel_conversations (
 );
 
 create table if not exists raw_channel_messages (
-	conversation_id bigint not null,
-	message_id bigint not null,
+	conversation_id text not null,
+	message_id text not null,
 	created_at timestamptz not null,
 	sender text,
 	text text,

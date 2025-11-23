@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { compareByChoseong } from '@/lib/text';
 
 type TopKeyword = { keyword: string; freq?: number; tfidf?: number };
 
@@ -37,16 +38,58 @@ export default function KeywordsClient() {
 		return s;
 	}
 
+	const optionsCacheRef = useRef<Map<string, InquiryOption[]>>(new Map());
+	const buildOptionsCacheKey = () => [from || '-', to || '-', source || '-'].join('|');
+
+	const clampRange = (start: string, end: string): { from: string; to: string } => {
+		const fromDate = new Date(start);
+		const toDate = new Date(end);
+		if (!Number.isFinite(fromDate.getTime()) || !Number.isFinite(toDate.getTime())) {
+			return { from: start, to: end };
+		}
+		const ONE_DAY_MS = 24 * 3600 * 1000;
+		const maxSpanMs = 365 * ONE_DAY_MS;
+		if (toDate.getTime() - fromDate.getTime() > maxSpanMs) {
+			const adjustedTo = new Date(fromDate.getTime() + maxSpanMs);
+			return {
+				from: fromDate.toISOString().slice(0, 10),
+				to: adjustedTo.toISOString().slice(0, 10),
+			};
+		}
+		return {
+			from: fromDate.toISOString().slice(0, 10),
+			to: toDate.toISOString().slice(0, 10),
+		};
+	};
+
 	async function fetchInquiryOptions() {
-		const qs = new URLSearchParams({ from, to, fieldTitle: '문의유형(고객)', source });
+		const { from: clampedFrom, to: clampedTo } = clampRange(from, to);
+		const cacheKey = buildOptionsCacheKey();
+		const cached = optionsCacheRef.current.get(cacheKey);
+		if (cached) {
+			setInquiries(cached);
+			return;
+		}
+		const qs = new URLSearchParams({ fieldTitle: '문의유형(고객)', source });
+		if (clampedFrom) qs.set('from', clampedFrom);
+		if (clampedTo) qs.set('to', clampedTo);
 		const res = await fetch(`/api/stats/inquiries/options?${qs.toString()}`, { cache: 'no-store' });
-		if (!res.ok) { setInquiries([]); return; }
+		if (!res.ok) {
+			setError(`문의유형 조회 실패: HTTP ${res.status}`);
+			setInquiries([]);
+			return;
+		}
 		const json = await res.json();
 		const seen = new Set<string>();
 		const options: InquiryOption[] = (json.items ?? [])
 			.map((r: any) => ({ inquiry_type: normalizeType(String(r?.inquiry_type ?? '')), ticket_count: Number(r?.ticket_count ?? 0) }))
 			.filter((r: any) => r.inquiry_type && (seen.has(r.inquiry_type) ? false : (seen.add(r.inquiry_type), true)))
-			.sort((a: any, b: any) => b.ticket_count - a.ticket_count);
+			.sort((a: InquiryOption, b: InquiryOption) => {
+				const cmp = compareByChoseong(a.inquiry_type ?? '', b.inquiry_type ?? '');
+				if (cmp !== 0) return cmp;
+				return b.ticket_count - a.ticket_count;
+			});
+		optionsCacheRef.current.set(cacheKey, options);
 		setInquiries(options);
 	}
 
@@ -58,13 +101,16 @@ export default function KeywordsClient() {
 				await fetchInquiryOptions();
 				return; // 1단계: 문의유형 불러오기만 수행
 			}
-			const qs = new URLSearchParams({ from, to, inquiryType: normalizeType(inquiryType), limit: '10', source });
-			const res = await fetch(`/api/keywords/top?${qs.toString()}`, { cache: 'no-store' });
-			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			const { from: clampedFrom, to: clampedTo } = clampRange(from, to);
+			const qs = new URLSearchParams({ inquiryType: normalizeType(inquiryType), limit: '10', source });
+			if (clampedFrom) qs.set('from', clampedFrom);
+			if (clampedTo) qs.set('to', clampedTo);
+		const res = await fetch(`/api/keywords/top?${qs.toString()}`, { cache: 'no-store' });
+		if (!res.ok) throw new Error(`HTTP ${res.status}`);
 			const json = await res.json();
 			setItems(json ?? []);
 		} catch (e: any) {
-			setError(e.message ?? 'failed');
+			setError(`키워드 검색 실패: ${e.message ?? 'unknown'}`);
 		} finally {
 			setLoading(false);
 		}

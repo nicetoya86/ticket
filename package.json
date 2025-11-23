@@ -10,9 +10,13 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.1",
+    "dotenv": "^17.2.3",
     "next": "^14.2.5",
+    "node-fetch": "^3.3.2",
+    "pg": "^8.16.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "xlsx": "^0.18.5",
     "zod": "^3.23.8"
   },
   "devDependencies": {
@@ -25,5 +29,21 @@
     "postcss": "^8.4.39",
     "tailwindcss": "^3.4.13",
     "typescript": "^5.6.2"
-  }
+  },
+  "description": "- Vercel에 새로운 프로젝트로 연결 후 자동 빌드됩니다.\r - `vercel.json`의 크론에 따라 정기 호출됩니다.",
+  "main": "index.js",
+  "directories": {
+    "lib": "lib"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nicetoya86/ticket.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/nicetoya86/ticket/issues"
+  },
+  "homepage": "https://github.com/nicetoya86/ticket#readme"
 }

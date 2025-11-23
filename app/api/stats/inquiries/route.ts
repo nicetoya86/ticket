@@ -1,4 +1,26 @@
 import { NextResponse } from 'next/server';
+import { getAllowedInquiryType, isAllowedInquiryType, isExcludedInquiryType, normalizeInquiryType } from '@/lib/inquiries';
+
+type RpcCacheEntry = { updatedAt: number; rows: any[] };
+const RPC_CACHE_TTL_MS = 60 * 1000;
+const textsRpcCache = new Map<string, RpcCacheEntry>();
+const groupedRpcCache = new Map<string, RpcCacheEntry>();
+const channelMessagesCache = new Map<string, RpcCacheEntry>();
+const channelDbRowsCache = new Map<string, RpcCacheEntry>();
+const CHANNEL_DB_ENABLED = process.env.CHANNEL_DB_ENABLED === 'true';
+const cloneRows = (rows: any[]): any[] => rows.map((row) => (row && typeof row === 'object' ? { ...row } : row));
+const getCachedRows = (cache: Map<string, RpcCacheEntry>, key: string): any[] | null => {
+	const cached = cache.get(key);
+	if (!cached) return null;
+	if (Date.now() - cached.updatedAt > RPC_CACHE_TTL_MS) {
+		cache.delete(key);
+		return null;
+	}
+	return cloneRows(cached.rows);
+};
+const setCachedRows = (cache: Map<string, RpcCacheEntry>, key: string, rows: any[]) => {
+	cache.set(key, { updatedAt: Date.now(), rows: cloneRows(rows) });
+};
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -6,6 +28,7 @@ export const runtime = 'nodejs';
 export async function GET(req: Request) {
     // If Supabase runtime config is missing in hosting env, return empty result instead of 500
     const hasConfig = Boolean(process.env.SUPABASE_ANON_KEY && process.env.SUPABASE_SERVICE_ROLE_KEY && (process.env.SUPABASE_URL || process.env.SUPABASE_PROJECT_ID));
+	const channelDbAvailable = hasConfig && CHANNEL_DB_ENABLED;
     if (!hasConfig) {
         return NextResponse.json({ items: [] }, { headers: { 'Cache-Control': 'no-store' } });
     }
@@ -15,18 +38,52 @@ export async function GET(req: Request) {
     const from = searchParams.get('from') ?? new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString().slice(0, 10);
     const to = searchParams.get('to') ?? new Date().toISOString().slice(0, 10);
     const fieldTitle = searchParams.get('fieldTitle') ?? '문의유형(고객)';
-    const status = searchParams.get('status') ?? 'closed';
+	const statusParam = searchParams.get('status');
+	const status = statusParam && statusParam.trim().length > 0 ? statusParam.trim() : null;
     const inquiryTypeParam = searchParams.get('inquiryType') ?? '';
-    const source = searchParams.get('source') ?? '';
+    const source = searchParams.get('source') ?? 'channel';
     const group = searchParams.get('group') === '1' || searchParams.get('group') === 'true';
     const detail = searchParams.get('detail') ?? '';
 	const debug = searchParams.get('debug') === '1';
 	const ticketIdParam = searchParams.get('ticketId');
 	const ticketId = ticketIdParam ? Number(ticketIdParam) : NaN;
 	const filterByTicket = Number.isFinite(ticketId) && ticketId > 0;
+	const buildCacheKey = (prefix: string, ft: string, statusFilter: string | null) =>
+		`${prefix}:${ft}|${statusFilter || 'all'}|${from}|${to}|${source}`;
+	const makeDateTimeRange = () => {
+		const start = `${from}T00:00:00+09:00`;
+		const end = `${to}T23:59:59.999+09:00`;
+		return { start, end };
+	};
+	const loadTextsByField = async (ft: string, statusFilter: string | null): Promise<any[]> => {
+		const cacheKey = buildCacheKey('texts', ft, statusFilter);
+		const cached = getCachedRows(textsRpcCache, cacheKey);
+		if (cached) return cached;
+		const { data, error } = await supabaseAdmin.rpc('inquiries_texts_by_type', {
+			p_from: from,
+			p_to: to,
+			p_field_title: ft,
+			p_status: statusFilter ?? null
+		});
+		if (!error && data) setCachedRows(textsRpcCache, cacheKey, data ?? []);
+		return data ?? [];
+	};
+	const loadGroupedByField = async (ft: string, statusFilter: string | null): Promise<any[]> => {
+		const cacheKey = buildCacheKey('grouped', ft, statusFilter);
+		const cached = getCachedRows(groupedRpcCache, cacheKey);
+		if (cached) return cached;
+		const { data, error } = await supabaseAdmin.rpc('inquiries_texts_grouped_by_ticket', {
+			p_from: from,
+			p_to: to,
+			p_field_title: ft,
+			p_status: statusFilter ?? null
+		});
+		if (!error && data) setCachedRows(groupedRpcCache, cacheKey, data ?? []);
+		return data ?? [];
+	};
 
     // helpers for cleaning texts mode
-    const stripBackref = (s: string): string => s.replace(/(^|\n)\s*\\\d+:?\s*/g, '$1');
+	const stripBackref = (s: string): string => s.replace(/(^|\n)\s*\\\d+:?\s*/g, '$1');
     const isPhoneCall = (s: string): boolean => /((발신전화\s+to\s+\d+|수신전화\s+\d+)|전화구분\s*:\s*(수신전화|발신전화))/i.test(s);
     const isBotLine = (line: string): boolean => {
         const l = line.trim();
@@ -48,7 +105,11 @@ export async function GET(req: Request) {
         if (/키워드를\s*입력/.test(l)) return true;
         if (/\[처음으로\]/.test(l)) return true;
         if (/처음으로/.test(l)) return true;
-        if (/^✅|^✔️|^➡️|^🔍️|^🔎️|^🔊️|^❗️|^👇️/u.test(l)) return true; // lines starting with these emojis
+		if (/^(?:✅|✔️|➡️|🔍|🔎|🔊|❗|❓|👇|💗|⭐|📌|📍|📣|📢|✂️|📎|📝|💬)[\uFE0F]?\s*/u.test(l)) return true; // button-style emoji shortcuts
+		const buttonKeywordRegex = /(이벤트|등록|수정|변경|요청|이미지|소개|연결|가이드|상담|종료|선택|문의|정보|계정|신규|처음으로|게시|삭제)/;
+		if (/^[^\p{L}\p{N}]{1,4}\s*[가-힣A-Za-z0-9/&\s]{1,40}$/u.test(l) && buttonKeywordRegex.test(l)) return true;
+		const emojiGuideRegex = /^(?:[\p{So}\p{Sk}\p{P}\uFE0F]{0,3}\s*)?[가-힣A-Za-z0-9/&\s]{2,60}(?:\s*[?!❓❗]+)?(?:\s*[\p{So}\p{Sk}\uFE0F]{0,2})?$/u;
+		if (emojiGuideRegex.test(l) && /(문의|요청|게시|안내|단계|등록|삭제|확인|이벤트)/.test(l)) return true;
         // Notice/announcement cards recommended by bot
         if (/^\s*\[?\s*공지\s*\]?/i.test(l)) return true;
         if (/공지사항/i.test(l)) return true;
@@ -119,17 +180,203 @@ export async function GET(req: Request) {
         out = out.replace(/\n{3,}/g, '\n\n').replace(/[\t ]*\n[\t ]*/g, '\n').trim();
         return out;
     };
+	const dedupeLines = (lines: string[]): string[] => {
+		const seen = new Set<string>();
+		const out: string[] = [];
+		for (const line of lines) {
+			const key = line.replace(/\s+/g, ' ').trim();
+			if (!key) continue;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			out.push(line);
+		}
+		return out;
+	};
+	const dedupeRecordsByNameAndText = (rows: any[]): any[] => {
+		const seen = new Set<string>();
+		const out: any[] = [];
+		for (const row of rows) {
+			const name = String(row?.ticket_name ?? row?.name ?? '').trim();
+			const id = String(row?.ticket_id ?? '').trim();
+			const text = 'text_value' in row ? String(row?.text_value ?? '') : '';
+			const normalizedText = text.replace(/\s+/g, ' ').trim();
+			const key = `${name || id}|${normalizedText}`;
+			if (seen.has(key) && normalizedText.length > 0) continue;
+			if (normalizedText.length > 0) seen.add(key);
+			out.push(row);
+		}
+		return out;
+	};
 
-    const normalizeType = (v: string): string => {
-        const s = (v ?? '').trim();
-        try {
-            if (/^\s*\[/.test(s)) {
-                const parsed = JSON.parse(s);
-                if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') return String(parsed[0]).trim();
-            }
-        } catch {}
-        return s;
-    };
+	const KST_OFFSET = '+09:00';
+	const toEpochMs = (dateStr: string | null, endOfDay = false): number | null => {
+		if (!dateStr) return null;
+		const suffix = endOfDay ? 'T23:59:59.999' : 'T00:00:00.000';
+		const ms = Date.parse(`${dateStr}${suffix}${KST_OFFSET}`);
+		return Number.isFinite(ms) ? ms : null;
+	};
+	const parseDateMs = (value: any): number | null => {
+		if (value == null) return null;
+		if (typeof value === 'number' && Number.isFinite(value)) return value;
+		const str = String(value ?? '').trim();
+		if (!str) return null;
+		if (/^\d+$/.test(str)) {
+			const asNum = Number(str);
+			if (Number.isFinite(asNum)) return asNum;
+		}
+		const ms = Date.parse(str);
+		return Number.isFinite(ms) ? ms : null;
+	};
+	const fromBoundMs = toEpochMs(from, false);
+	const toBoundMs = toEpochMs(to, true);
+	const isWithinSelectedRange = (value: any): boolean => {
+		const ms = parseDateMs(value);
+		if (ms == null) return true;
+		if (fromBoundMs != null && ms < fromBoundMs) return false;
+		if (toBoundMs != null && ms > toBoundMs) return false;
+		return true;
+	};
+
+	const normalizeType = (v: string): string => normalizeInquiryType(v);
+	const extractTagParts = (tagsIn?: string[] | null): string[] => {
+		const out: string[] = [];
+		const add = (value: any) => {
+			if (value == null) return;
+			const s = String(value ?? '').trim();
+			if (!s) return;
+			if (/^\s*\[/.test(s)) {
+				try {
+					const arr = JSON.parse(s);
+					if (Array.isArray(arr)) {
+						for (const part of arr) add(part);
+						return;
+					}
+				} catch {}
+			}
+			const split = s.split(/[;,|]/g).map((part) => part.trim()).filter(Boolean);
+			if (split.length > 1) {
+				for (const part of split) add(part);
+				return;
+			}
+			const normalized = normalizeType(s);
+			if (normalized) out.push(normalized);
+		};
+		if (Array.isArray(tagsIn)) {
+			for (const tag of tagsIn) add(tag);
+		}
+		return Array.from(new Set(out));
+	};
+	const pickPrimaryTag = (tagsIn?: string[] | null): string | null => {
+		const parts = extractTagParts(tagsIn);
+		for (const part of parts) {
+			if (isAllowedInquiryType(part)) return part;
+		}
+		return parts.length > 0 ? parts[0] : null;
+	};
+	const loadChannelMessagesWithinRange = async (): Promise<any[]> => {
+		if (!channelDbAvailable) return [];
+		const cacheKey = `channel-msgs:${from}|${to}`;
+		const cached = getCachedRows(channelMessagesCache, cacheKey);
+		if (cached) return cached;
+		const { start, end } = makeDateTimeRange();
+		const { data, error } = await supabaseAdmin
+			.from('raw_channel_messages')
+			.select('conversation_id, message_id, created_at, sender, text')
+			.gte('created_at', start)
+			.lte('created_at', end)
+			.order('created_at', { ascending: true })
+			.limit(50000);
+		const rows = !error && Array.isArray(data) ? data : [];
+		setCachedRows(channelMessagesCache, cacheKey, rows);
+		return rows;
+	};
+	const buildChannelRowsFromDb = async (tnorm: string | null): Promise<any[]> => {
+		if (!channelDbAvailable) return [];
+		const cacheKey = `channel-db:${from}|${to}|${tnorm || 'ALL'}`;
+		const cached = getCachedRows(channelDbRowsCache, cacheKey);
+		if (cached) return cached;
+		const messages = await loadChannelMessagesWithinRange();
+		if (!messages.length) {
+			channelDbRowsCache.set(cacheKey, { updatedAt: Date.now(), rows: [] });
+			return [];
+		}
+		const grouped = new Map<string, string[]>();
+		const firstMessageDate = new Map<string, string>();
+		for (const m of messages) {
+			if (String(m?.sender ?? '').toLowerCase() !== 'user') continue;
+			const convId = String(m?.conversation_id ?? '').trim();
+			if (!convId) continue;
+			const cleaned = cleanTextBodyOnly(String(m?.text ?? ''));
+			if (!cleaned || cleaned.trim().length === 0 || isPhoneCall(cleaned)) continue;
+			const arr = grouped.get(convId) ?? [];
+			arr.push(cleaned);
+			grouped.set(convId, arr);
+			const created = String(m?.created_at ?? '').trim();
+			if (!firstMessageDate.has(convId) || created.localeCompare(firstMessageDate.get(convId) ?? '') < 0) {
+				firstMessageDate.set(convId, created);
+			}
+		}
+		const conversationIds = Array.from(grouped.keys());
+		if (!conversationIds.length) {
+			channelDbRowsCache.set(cacheKey, { updatedAt: Date.now(), rows: [] });
+			return [];
+		}
+		const conversationMeta: any[] = [];
+		const chunkSize = 500;
+		for (let i = 0; i < conversationIds.length; i += chunkSize) {
+			const chunk = conversationIds.slice(i, i + chunkSize);
+			const { data, error } = await supabaseAdmin
+				.from('raw_channel_conversations')
+				.select('id, name, tags, created_at')
+				.in('id', chunk);
+			if (!error && Array.isArray(data)) {
+				conversationMeta.push(...data);
+			}
+		}
+		const convoMap = new Map<string, any>();
+		for (const conv of conversationMeta) {
+			convoMap.set(String(conv?.id ?? '').trim(), conv);
+		}
+		const rows: any[] = [];
+		for (const convId of conversationIds) {
+			const conv = convoMap.get(convId);
+			if (!conv) continue;
+			const tags = extractTagParts(conv?.tags ?? null);
+			if (tags.length === 0) continue;
+			let selected: string | null = null;
+			if (tnorm) {
+				if (tags.includes(tnorm)) selected = tnorm;
+				else continue;
+			} else {
+				selected = pickPrimaryTag(tags);
+			}
+			if (!selected || !isAllowedInquiryType(selected)) continue;
+			const texts = dedupeLines(grouped.get(convId) ?? []);
+			if (texts.length === 0) continue;
+			rows.push({
+				inquiry_type: selected,
+				ticket_id: Number.isFinite(Number(convId)) ? Number(convId) : convId,
+				ticket_name: conv?.name ?? null,
+				created_at: firstMessageDate.get(convId) ?? String(conv?.created_at ?? from),
+				text_type: 'messages_block',
+				text_value: texts.join('\n'),
+			});
+		}
+		rows.sort((a: any, b: any) => String(b.created_at).localeCompare(String(a.created_at)) || Number(a.ticket_id) - Number(b.ticket_id));
+		setCachedRows(channelDbRowsCache, cacheKey, rows);
+		return rows;
+	};
+	const getChannelTagCountsFromDb = async (): Promise<Map<string, number>> => {
+		if (!channelDbAvailable) return new Map<string, number>();
+		const rows = await buildChannelRowsFromDb(null);
+		const counter = new Map<string, number>();
+		for (const row of rows) {
+			const tag = String(row?.inquiry_type ?? '').trim();
+			if (!tag) continue;
+			counter.set(tag, (counter.get(tag) ?? 0) + 1);
+		}
+		return counter;
+	};
 
     // Candidate field titles to improve robustness across sources/forms
     const fieldTitleCandidates = Array.from(new Set<string>([
@@ -138,32 +385,31 @@ export async function GET(req: Request) {
         '문의 유형',
         '문의유형(고객)'
     ])).filter((v) => typeof v === 'string' && v.trim().length > 0);
+	const selectedInquiryType = normalizeType(inquiryTypeParam);
+	const isSelectedInquiryTypeExcluded = isExcludedInquiryType(selectedInquiryType);
 
     // texts: always return raw body-derived texts; ignore group to honor "body only" requirement
 	if (detail === 'texts') {
-        let all: any[] = [];
-        let lastError: string | null = null;
-        // Try with provided status first
-        for (const ft of fieldTitleCandidates) {
-            const { data, error } = await supabaseAdmin.rpc('inquiries_texts_by_type', { p_from: from, p_to: to, p_field_title: ft, p_status: status });
-            if (error) { lastError = error.message; continue; }
-            all = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
-            if (all.length > 0) break;
-        }
-        // Retry without status restriction if empty
-        if (all.length === 0 && status) {
+		const tnorm = selectedInquiryType;
+		if (tnorm && isSelectedInquiryTypeExcluded) {
+			return NextResponse.json({ items: [] }, { headers: { 'Cache-Control': 'no-store' } });
+		}
+        const fetchTextsForStatus = async (statusFilter: string | null): Promise<any[]> => {
             for (const ft of fieldTitleCandidates) {
-                const { data, error } = await supabaseAdmin.rpc('inquiries_texts_by_type', { p_from: from, p_to: to, p_field_title: ft, p_status: '' });
-                if (error) { lastError = error.message; continue; }
-                all = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
-                if (all.length > 0) break;
+                const data = await loadTextsByField(ft, statusFilter);
+                const filtered = (data ?? []).filter((r: any) => isAllowedInquiryType(r?.inquiry_type));
+                if (filtered.length > 0) return filtered;
             }
+            return [];
+        };
+        let all: any[] = await fetchTextsForStatus(status);
+        if (all.length === 0 && status) {
+            all = await fetchTextsForStatus(null);
         }
         // Note: even if RPC errored for all candidates, proceed to external fallbacks below
 		if (filterByTicket) {
 			all = all.filter((r: any) => Number(r?.ticket_id) === ticketId);
 		}
-		const tnorm = normalizeType(inquiryTypeParam);
 		const forType = tnorm ? all.filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === tnorm) : all;
 		const preCount = forType.length;
 		const cleaned = forType.map((r: any) => ({ ...r, text_value: cleanTextBodyOnly(String(r.text_value ?? '')) }));
@@ -172,8 +418,9 @@ export async function GET(req: Request) {
 		for (const r of cleaned) {
 			if (isPhoneCall(String(r.text_value ?? ''))) excludeTickets.add(Number(r.ticket_id));
 		}
-		const items = cleaned
+		let items = cleaned
 			.filter((r: any) => !excludeTickets.has(Number(r.ticket_id)) && String(r.text_value ?? '').trim().length > 0);
+		items = dedupeRecordsByNameAndText(items);
 
 		// Final fallback: if still empty, pull from Zendesk (tickets/comments) when DB rows are missing
 		if ((items ?? []).length === 0 && (source === 'zendesk' || source === '')) {
@@ -241,11 +488,16 @@ export async function GET(req: Request) {
 							let commentRows: any[] = [];
 							const comm = await supabaseAdmin
 								.from('raw_zendesk_comments')
-								.select('ticket_id, comment_id, created_at, body')
+								.select('ticket_id, comment_id, created_at, body, raw_json')
 								.in('ticket_id', chunk)
 								.order('created_at', { ascending: true });
 							if (!comm.error && (comm.data ?? []).length > 0) {
-								commentRows = comm.data ?? [];
+								// 공개 코멘트만 채택 (고객-매니저 대화 한정)
+								commentRows = (comm.data ?? []).filter((c: any) => {
+									const rj = (c as any)?.raw_json ?? null;
+									// raw_json.public 없으면 기본적으로 공개로 간주
+									return rj == null || rj.public === true;
+								});
 							} else {
 								try {
 									const { fetchTicketComments } = await import('@/lib/vendors/zendesk');
@@ -255,13 +507,19 @@ export async function GET(req: Request) {
 											ticket_id: Number(tid),
 											comment_id: Number(c.id),
 											created_at: String(c.created_at),
-											body: String(c.body ?? '')
+											body: String(c.body ?? ''),
+											raw_json: { public: Boolean(c?.public ?? true) }
 										})));
 									}
 								} catch {}
 							}
 							if ((commentRows ?? []).length > 0) {
 								const rowsOut = commentRows
+									// 공개 코멘트만 유지
+									.filter((c: any) => {
+										const rj = (c as any)?.raw_json ?? null;
+										return rj == null || rj.public === true;
+									})
 									.map((c: any) => ({
 										inquiry_type: normTarget,
 										ticket_id: Number(c.ticket_id),
@@ -275,7 +533,9 @@ export async function GET(req: Request) {
 						}
 					}
 
-					const combined = [...derivedComments, ...derivedDesc];
+					let combined = [...derivedComments, ...derivedDesc];
+					// 최신순으로 정렬
+					combined.sort((a: any, b: any) => String(b.created_at).localeCompare(String(a.created_at)) || Number(b.ticket_id) - Number(a.ticket_id));
 					if (combined.length > 0) {
 						return NextResponse.json({ items: combined }, { headers: { 'Cache-Control': 'no-store' } });
 					}
@@ -305,12 +565,16 @@ export async function GET(req: Request) {
 								const chunk2 = hIds.slice(i, i + chunkSize2);
 								const comm2 = await supabaseAdmin
 									.from('raw_zendesk_comments')
-									.select('ticket_id, created_at, body')
+									.select('ticket_id, created_at, body, raw_json')
 									.in('ticket_id', chunk2)
 									.order('created_at', { ascending: true });
 								let rows2: any[] = [];
 								if (!comm2.error && (comm2.data ?? []).length > 0) {
-									rows2 = comm2.data ?? [];
+									// 공개 코멘트만
+									rows2 = (comm2.data ?? []).filter((c: any) => {
+										const rj = (c as any)?.raw_json ?? null;
+										return rj == null || rj.public === true;
+									});
 								} else {
 									const { fetchTicketComments } = await import('@/lib/vendors/zendesk');
 									for (const tid of chunk2) {
@@ -318,7 +582,8 @@ export async function GET(req: Request) {
 										rows2.push(...(zc2 ?? []).map((c: any) => ({
 											ticket_id: Number(tid),
 											created_at: String(c.created_at),
-											body: String(c.body ?? '')
+											body: String(c.body ?? ''),
+											raw_json: { public: Boolean(c?.public ?? true) }
 										})));
 									}
 								}
@@ -348,7 +613,7 @@ export async function GET(req: Request) {
 							text_type: 'body',
 							text_value: cleanText(String(t.description ?? ''))
 						})).filter((r: any) => String(r.text_value ?? '').trim().length > 0 && !isPhoneCall(String(r.text_value ?? '')));
-						const hCombined = [...hComments, ...hDesc];
+						const hCombined = [...hComments, ...hDesc].sort((a: any, b: any) => String(b.created_at).localeCompare(String(a.created_at)) || Number(b.ticket_id) - Number(a.ticket_id));
 						if (hCombined.length > 0) {
 							return NextResponse.json({ items: hCombined }, { headers: { 'Cache-Control': 'no-store' } });
 						}
@@ -357,6 +622,82 @@ export async function GET(req: Request) {
 			} catch {}
 		}
 
+		// Supabase raw ChannelTalk 데이터 보강 (대화 생성일과 무관하게 메시지 일자 기준)
+		const shouldHydrateChannelDb = channelDbAvailable && source === 'channel' && (!tnorm || (items ?? []).length === 0);
+		if (shouldHydrateChannelDb) {
+			try {
+				const channelDbRows = await buildChannelRowsFromDb(tnorm || null);
+				if (channelDbRows.length > 0) {
+					if ((items ?? []).length === 0) {
+						items = channelDbRows;
+					} else {
+						items = dedupeRecordsByNameAndText([...(items ?? []), ...channelDbRows]);
+					}
+				}
+			} catch {}
+		}
+
+		// ChannelTalk API fallback: 실시간 동기화 이전 분량을 보강 (필요 시에만 호출)
+		const needChannelFallback = source === 'channel' && (items ?? []).length === 0;
+		if (needChannelFallback) {
+			try {
+				const { listUserChats, listMessagesByChatIds } = await import('@/lib/vendors/channeltalk');
+				const chats = await listUserChats(from, to, 5000);
+				const chatMap = new Map<string, any>();
+				for (const chat of chats) {
+					chatMap.set(String(chat.id), chat);
+				}
+				const matchedChats = chats.filter((c) => {
+					const parts = extractTagParts(c?.tags ?? null);
+					if (parts.length === 0) return false;
+					if (!tnorm) return parts.some((v) => isAllowedInquiryType(v));
+					return parts.some((v) => v === tnorm);
+				});
+				const matchedChatIds = matchedChats.map((c) => c.id);
+				if (matchedChatIds.length > 0) {
+					const msgs = await listMessagesByChatIds(matchedChatIds, 400);
+					const seenMessages = new Set<string>();
+					const onlyUser = [];
+					for (const m of msgs) {
+						if (String(m.personType ?? '').toLowerCase() !== 'user') continue;
+						if (!isWithinSelectedRange(m.createdAt)) continue;
+						const dedupeKey = `${m.chatId ?? ''}::${m.id ?? ''}`;
+						if (seenMessages.has(dedupeKey)) continue;
+						seenMessages.add(dedupeKey);
+						onlyUser.push(m);
+					}
+					const rows = onlyUser
+						.map((m) => {
+							const chatInfo = chatMap.get(String(m.chatId ?? ''));
+							const assignedTag = tnorm || pickPrimaryTag(chatInfo?.tags ?? null);
+							if (!assignedTag || !isAllowedInquiryType(assignedTag)) return null;
+							return {
+								inquiry_type: assignedTag,
+								ticket_id: Number.isFinite(Number(m.chatId)) ? Number(m.chatId) : String(m.chatId),
+								ticket_name: chatInfo?.name ?? chatInfo?.profile?.name ?? null,
+								created_at: String(m.createdAt ?? from),
+								text_type: 'message',
+								text_value: cleanTextBodyOnly(String(m.plainText ?? '')),
+							};
+						})
+						.filter((r: any) => r && String(r.text_value ?? '').trim().length > 0 && !isPhoneCall(String(r.text_value ?? '')));
+					const dedupedRows = dedupeRecordsByNameAndText(rows);
+					if (dedupedRows.length > 0) {
+						let combined: any[];
+						if ((items ?? []).length === 0) {
+							combined = dedupedRows;
+						} else {
+							combined = dedupeRecordsByNameAndText([...(items ?? []), ...dedupedRows]);
+						}
+						combined.sort((a: any, b: any) => String(b.created_at).localeCompare(String(a.created_at)) || Number(a.ticket_id) - Number(b.ticket_id));
+						return NextResponse.json({ items: combined }, { headers: { 'Cache-Control': 'no-store' } });
+					}
+				}
+			} catch {}
+		}
+
+		// 일관된 최신순 정렬
+		items.sort((a: any, b: any) => String(b.created_at).localeCompare(String(a.created_at)) || Number(b.ticket_id) - Number(a.ticket_id));
 		const payload: any = { items };
 		if (debug) {
 			payload.debug = {
@@ -370,33 +711,36 @@ export async function GET(req: Request) {
 		}
 		return NextResponse.json(payload, { headers: { 'Cache-Control': 'no-store' } });
     } else if (group) {
-        let grouped: any[] = [];
-        let lastError: string | null = null;
-        for (const ft of fieldTitleCandidates) {
-            const { data, error } = await supabaseAdmin.rpc('inquiries_texts_grouped_by_ticket', { p_from: from, p_to: to, p_field_title: ft, p_status: status });
-            if (error) { lastError = error.message; continue; }
-            grouped = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
-            if (grouped.length > 0) break;
-        }
-        if (grouped.length === 0 && status) {
+		const tnorm = selectedInquiryType;
+		if (tnorm && isSelectedInquiryTypeExcluded) {
+			return NextResponse.json({ items: [] }, { headers: { 'Cache-Control': 'no-store' } });
+		}
+        const fetchGroupedForStatus = async (statusFilter: string | null): Promise<any[]> => {
             for (const ft of fieldTitleCandidates) {
-                const { data, error } = await supabaseAdmin.rpc('inquiries_texts_grouped_by_ticket', { p_from: from, p_to: to, p_field_title: ft, p_status: '' });
-                if (error) { lastError = error.message; continue; }
-                grouped = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
-                if (grouped.length > 0) break;
+                const data = await loadGroupedByField(ft, statusFilter);
+                const filtered = (data ?? []).filter((r: any) => isAllowedInquiryType(r?.inquiry_type));
+                if (filtered.length > 0) return filtered;
             }
+            return [];
+        };
+        let grouped: any[] = await fetchGroupedForStatus(status);
+        if (grouped.length === 0 && status) {
+            grouped = await fetchGroupedForStatus(null);
         }
         // Note: even if RPC errored for all candidates, proceed to external fallbacks below
         let items = grouped;
         // optional per-ticket filter for debugging
         if (filterByTicket) items = items.filter((r: any) => Number(r?.ticket_id) === ticketId);
         // inquiry type filter
-        const tnorm = normalizeType(inquiryTypeParam);
         if (tnorm) items = items.filter((r: any) => normalizeType(String(r?.inquiry_type ?? '')) === tnorm);
         // cleaning and phone-call exclusion
         items = items
             .map((r: any) => ({ ...r, text_value: cleanText(String(r.text_value ?? '')) }))
             .filter((r: any) => !isPhoneCall(String(r.text_value ?? '')) && String(r.text_value ?? '').trim().length > 0);
+        items = dedupeRecordsByNameAndText(items);
+
+		// 최신순 정렬 보장
+		items.sort((a: any, b: any) => String(b.created_at).localeCompare(String(a.created_at)) || Number(b.ticket_id) - Number(a.ticket_id));
 
 		// Final fallback: use raw Zendesk tickets descriptions if grouped texts are empty
 		if ((items ?? []).length === 0 && (source === 'zendesk' || source === '')) {
@@ -428,12 +772,17 @@ export async function GET(req: Request) {
 								const chunk = ticketIds.slice(i, i + chunkSize);
 								const comm = await supabaseAdmin
 									.from('raw_zendesk_comments')
-									.select('ticket_id, created_at, body')
+									.select('ticket_id, created_at, body, raw_json')
 									.in('ticket_id', chunk)
 									.order('created_at', { ascending: true });
 								if (!comm.error) {
 									const grouped = new Map<number, string[]>();
-									for (const c of (comm.data ?? [])) {
+									// 공개 코멘트만 처리
+									const onlyPublic = (comm.data ?? []).filter((c: any) => {
+										const rj = (c as any)?.raw_json ?? null;
+										return rj == null || rj.public === true;
+									});
+									for (const c of onlyPublic) {
 										const arr = grouped.get(Number(c.ticket_id)) ?? [];
 										const txt = cleanText(String(c.body ?? ''));
 										if (txt.trim().length > 0 && !isPhoneCall(txt)) arr.push(txt);
@@ -462,6 +811,7 @@ export async function GET(req: Request) {
 						})).filter((r: any) => String(r.text_value ?? '').trim().length > 0 && !isPhoneCall(String(r.text_value ?? '')));
 
 						const combined = [...derivedBlocks, ...derivedDesc];
+						combined.sort((a: any, b: any) => String(b.created_at).localeCompare(String(a.created_at)) || Number(b.ticket_id) - Number(a.ticket_id));
 						if (combined.length > 0) {
 							return NextResponse.json({ items: combined }, { headers: { 'Cache-Control': 'no-store' } });
 						}
@@ -491,12 +841,16 @@ export async function GET(req: Request) {
 									const chunk2 = hIds.slice(i, i + chunkSize2);
 									const comm2 = await supabaseAdmin
 										.from('raw_zendesk_comments')
-										.select('ticket_id, created_at, body')
+										.select('ticket_id, created_at, body, raw_json')
 										.in('ticket_id', chunk2)
 										.order('created_at', { ascending: true });
 									let rows2: any[] = [];
 									if (!comm2.error && (comm2.data ?? []).length > 0) {
-										rows2 = comm2.data ?? [];
+										// 공개 코멘트만
+										rows2 = (comm2.data ?? []).filter((c: any) => {
+											const rj = (c as any)?.raw_json ?? null;
+											return rj == null || rj.public === true;
+										});
 									} else {
 										const { fetchTicketComments } = await import('@/lib/vendors/zendesk');
 										for (const tid of chunk2) {
@@ -504,7 +858,8 @@ export async function GET(req: Request) {
 											rows2.push(...(zc2 ?? []).map((c: any) => ({
 												ticket_id: Number(tid),
 												created_at: String(c.created_at),
-												body: String(c.body ?? '')
+												body: String(c.body ?? ''),
+												raw_json: { public: Boolean(c?.public ?? true) }
 											})));
 										}
 									}
@@ -534,7 +889,7 @@ export async function GET(req: Request) {
 								text_type: 'body',
 								text_value: cleanText(String(t.description ?? ''))
 							})).filter((r: any) => String(r.text_value ?? '').trim().length > 0 && !isPhoneCall(String(r.text_value ?? '')));
-							const hCombined = [...blocks, ...desc2];
+							const hCombined = [...blocks, ...desc2].sort((a: any, b: any) => String(b.created_at).localeCompare(String(a.created_at)) || Number(b.ticket_id) - Number(a.ticket_id));
 							if (hCombined.length > 0) {
 								return NextResponse.json({ items: hCombined }, { headers: { 'Cache-Control': 'no-store' } });
 							}
@@ -544,11 +899,81 @@ export async function GET(req: Request) {
 			} catch {}
 		}
 
+		// ChannelTalk raw 데이터(메시지 기준) 보강
+		const shouldHydrateChannelDbGrouped = channelDbAvailable && source === 'channel' && (!tnorm || (items ?? []).length === 0);
+		if (shouldHydrateChannelDbGrouped) {
+			try {
+				const channelDbRows = await buildChannelRowsFromDb(tnorm || null);
+				if (channelDbRows.length > 0) {
+					if ((items ?? []).length === 0) items = channelDbRows;
+					else items = dedupeRecordsByNameAndText([...(items ?? []), ...channelDbRows]);
+				}
+			} catch {}
+		}
+
+		// ChannelTalk API fallback
+		const needChannelFallbackGrouped = source === 'channel' && (items ?? []).length === 0;
+		if (needChannelFallbackGrouped) {
+			try {
+				const { listUserChats, listMessagesByChatIds } = await import('@/lib/vendors/channeltalk');
+				const chats = await listUserChats(from, to, 5000);
+				const matched = chats.filter((c) => {
+					const parts = extractTagParts(c?.tags ?? null);
+					if (parts.length === 0) return false;
+					if (!tnorm) return parts.some((v) => isAllowedInquiryType(v));
+					return parts.some((v) => v === tnorm);
+				});
+				const chatIds = matched.map((c) => c.id);
+				if (chatIds.length > 0) {
+					const msgs = await listMessagesByChatIds(chatIds, 400);
+					const grouped = new Map<string, string[]>();
+					const seenMessages = new Set<string>();
+					for (const m of msgs) {
+						if (String(m.personType ?? '').toLowerCase() !== 'user') continue;
+						if (!isWithinSelectedRange(m.createdAt)) continue;
+						const dedupeKey = `${m.chatId ?? ''}::${m.id ?? ''}`;
+						if (seenMessages.has(dedupeKey)) continue;
+						seenMessages.add(dedupeKey);
+						const mapKey = String(m.chatId ?? '');
+						const arr = grouped.get(mapKey) ?? [];
+						const txt = cleanText(String(m.plainText ?? ''));
+						if (txt.trim().length > 0 && !isPhoneCall(txt)) arr.push(txt);
+						grouped.set(mapKey, arr);
+					}
+					const blocks: any[] = [];
+					for (const c of matched) {
+						const key = String(c.id ?? '');
+						const arr = grouped.get(key) ?? [];
+						const deduped = dedupeLines(arr);
+						if (deduped.length === 0) continue;
+						const assignedTag = tnorm || pickPrimaryTag(c?.tags ?? null);
+						if (!assignedTag || !isAllowedInquiryType(assignedTag)) continue;
+						blocks.push({
+							inquiry_type: assignedTag,
+							ticket_id: Number.isFinite(Number(c.id)) ? Number(c.id) : key,
+							ticket_name: c?.name ?? c?.profile?.name ?? null,
+							created_at: String(c.createdAt ?? from),
+							text_type: 'messages_block',
+							text_value: deduped.join('\n'),
+						});
+					}
+					const dedupedBlocks = dedupeRecordsByNameAndText(blocks);
+					if (dedupedBlocks.length > 0) {
+						let combinedBlocks: any[];
+						if ((items ?? []).length === 0) combinedBlocks = dedupedBlocks;
+						else combinedBlocks = dedupeRecordsByNameAndText([...(items ?? []), ...dedupedBlocks]);
+						combinedBlocks.sort((a: any, b: any) => String(b.created_at).localeCompare(String(a.created_at)) || Number(a.ticket_id) - Number(b.ticket_id));
+						return NextResponse.json({ items: combinedBlocks }, { headers: { 'Cache-Control': 'no-store' } });
+					}
+				}
+			} catch {}
+		}
+
         return NextResponse.json({ items }, { headers: { 'Cache-Control': 'no-store' } });
     } else if (detail === '1' || detail === 'users') {
         const { data, error } = await supabaseAdmin.rpc('inquiries_users_by_type', { p_from: from, p_to: to, p_field_title: fieldTitle, p_status: status });
         if (error) return NextResponse.json({ items: [], note: 'users_error', message: error.message }, { status: 200, headers: { 'Cache-Control': 'no-store' } });
-        const items = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
+        const items = (data ?? []).filter((r: any) => isAllowedInquiryType(r?.inquiry_type));
         return NextResponse.json({ items }, { headers: { 'Cache-Control': 'no-store' } });
     }
 
@@ -558,31 +983,32 @@ export async function GET(req: Request) {
     for (const ft of fieldTitleCandidates) {
         const { data, error } = await supabaseAdmin.rpc('unified_inquiries_by_type', { p_from: from, p_to: to, p_field_title: ft, p_status: status });
         if (error) { lastAggError = error.message; continue; }
-        items = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
+        items = (data ?? []).filter((r: any) => isAllowedInquiryType(r?.inquiry_type));
         if (items.length > 0) break;
     }
     if (items.length === 0 && status) {
         for (const ft of fieldTitleCandidates) {
             const { data, error } = await supabaseAdmin.rpc('unified_inquiries_by_type', { p_from: from, p_to: to, p_field_title: ft, p_status: '' });
             if (error) { lastAggError = error.message; continue; }
-            items = (data ?? []).filter((r: any) => r?.inquiry_type && !String(r.inquiry_type).startsWith('병원_'));
+            items = (data ?? []).filter((r: any) => isAllowedInquiryType(r?.inquiry_type));
             if (items.length > 0) break;
         }
     }
     if (items.length === 0) {
         for (const ft of fieldTitleCandidates) {
-            const fb = await supabaseAdmin.rpc('inquiries_texts_grouped_by_ticket', { p_from: from, p_to: to, p_field_title: ft, p_status: status });
-            if (!fb.error) {
+            try {
+                const data = await loadGroupedByField(ft, status);
+                if (!data || data.length === 0) continue;
                 const map = new Map<string, number>();
-                for (const row of fb.data ?? []) {
-                    const t = row?.inquiry_type as string | null;
-                    if (!t || String(t).startsWith('병원_')) continue;
+                for (const row of data ?? []) {
+                    const t = getAllowedInquiryType(row?.inquiry_type);
+                    if (!t) continue;
                     map.set(t, (map.get(t) ?? 0) + 1);
                 }
                 const derived = Array.from(map.entries()).map(([inquiry_type, ticket_count]) => ({ inquiry_type, ticket_count })).sort((a, b) => b.ticket_count - a.ticket_count);
                 if (derived.length > 0) { items = derived; break; }
-            } else {
-                lastAggError = fb.error.message;
+            } catch (err: any) {
+                lastAggError = err?.message ?? null;
             }
         }
     }
@@ -599,11 +1025,11 @@ export async function GET(req: Request) {
             const counter = new Map<string, number>();
             for (const t of tickets) {
                 const tags: string[] = Array.isArray((t as any)?.tags) ? (t as any).tags : [];
-                for (const tag of tags) {
-                    const k = String(tag ?? '').trim();
-                    if (!k) continue;
-                    counter.set(k, (counter.get(k) ?? 0) + 1);
-                }
+				for (const tag of tags) {
+					const normalized = getAllowedInquiryType(tag);
+					if (!normalized) continue;
+					counter.set(normalized, (counter.get(normalized) ?? 0) + 1);
+				}
             }
             const derived = [...counter.entries()]
                 .map(([inquiry_type, ticket_count]) => ({ inquiry_type, ticket_count }))
@@ -611,6 +1037,40 @@ export async function GET(req: Request) {
                 .slice(0, 200);
             if (derived.length > 0) items = derived;
         }
+    }
+    // ChannelTalk raw message 기반 태그 집계
+    if (channelDbAvailable && items.length === 0 && source === 'channel') {
+        try {
+            const counter = await getChannelTagCountsFromDb();
+            if (counter.size > 0) {
+                items = [...counter.entries()]
+                    .map(([inquiry_type, ticket_count]) => ({ inquiry_type, ticket_count }))
+                    .sort((a, b) => b.ticket_count - a.ticket_count);
+            }
+        } catch {}
+    }
+
+    // 최종 ChannelTalk API 폴백
+    if (items.length === 0 && source === 'channel') {
+        try {
+            const { listUserChats } = await import('@/lib/vendors/channeltalk');
+            const chats = await listUserChats(from, to, 5000);
+            const counter = new Map<string, number>();
+            for (const c of chats) {
+                const rawTags: string[] = Array.isArray(c?.tags) ? (c?.tags as string[]) : [];
+                const stringTags = rawTags.flatMap((t) => String(t ?? '').split(/[;,|]/g)).map((s) => s.trim()).filter((s) => s.length > 0);
+				for (const tag of stringTags) {
+					const normalized = getAllowedInquiryType(tag);
+					if (!normalized) continue;
+					counter.set(normalized, (counter.get(normalized) ?? 0) + 1);
+				}
+            }
+            const derived = [...counter.entries()]
+                .map(([inquiry_type, ticket_count]) => ({ inquiry_type, ticket_count }))
+                .sort((a, b) => b.ticket_count - a.ticket_count)
+                .slice(0, 200);
+            if (derived.length > 0) items = derived;
+        } catch {}
     }
     return NextResponse.json({ items }, { headers: { 'Cache-Control': 'no-store' } });
 }
